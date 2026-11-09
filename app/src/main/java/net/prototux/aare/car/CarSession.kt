@@ -445,12 +445,19 @@ class CarSession(
                 // Rotary controller: each detent moves focus to the next/previous element in layout
                 // order, like Android Auto. Compose maps Tab to "focus next" and Shift+Tab to
                 // "focus previous" (not D-pad up/down, which is 2D spatial and wrong for a knob).
+                // A screen driving the knob itself (the browser scrolls with it) gets it first.
                 for (r in report.relativeEvent.dataList) {
-                    val meta = if (r.delta < 0) KeyEvent.META_SHIFT_ON else 0
-                    repeat(kotlin.math.abs(r.delta)) {
-                        val t = SystemClock.uptimeMillis()
-                        display?.dispatchKey(KeyEvent(t, t, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_TAB, 0, meta))
-                        display?.dispatchKey(KeyEvent(t, t, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_TAB, 0, meta))
+                    val delta = r.delta
+                    val keycode = r.keycode
+                    main.post {
+                        noteInput("knob $keycode " + if (delta > 0) "clockwise" else "anticlockwise", "turned $delta")
+                        if (runtime.screenInput?.onRotary(delta) == true) return@post
+                        val meta = if (delta < 0) KeyEvent.META_SHIFT_ON else 0
+                        repeat(kotlin.math.abs(delta)) {
+                            val t = SystemClock.uptimeMillis()
+                            display?.dispatchKey(KeyEvent(t, t, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_TAB, 0, meta))
+                            display?.dispatchKey(KeyEvent(t, t, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_TAB, 0, meta))
+                        }
                     }
                 }
             }
@@ -460,7 +467,17 @@ class CarSession(
     /** HOME goes to the dashboard; held, it hands the screen back to the car. */
     private val homeKey = LongPressKey(onPress = { runtime.actions.goHome() }, onLongPress = ::exitToCar)
 
+    /** Each car key and knob seen this session, logged once: which codes a head unit sends (main thread). */
+    private val seenInput = HashSet<String>()
+
+    private fun noteInput(what: String, detail: String) {
+        if (seenInput.add(what)) DiagLog.add("input: car $what ($detail)")
+    }
+
     private fun onKey(code: Int, down: Boolean, longPress: Boolean) {
+        noteInput(if (longPress) "key $code long" else "key $code", KeyEvent.keyCodeToString(code) + if (longPress) ", long press" else "")
+        // A screen driving the keys itself (browser pointer, video player) first; Home and Back stay global.
+        if (code != KeyEvent.KEYCODE_HOME && code != KeyEvent.KEYCODE_BACK && runtime.screenInput?.onKey(code, down, longPress) == true) return
         when (code) {
             KeyEvent.KEYCODE_HOME -> homeKey.onKey(down, longPress)
             KeyEvent.KEYCODE_BACK -> if (!down) back()
