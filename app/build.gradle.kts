@@ -124,5 +124,7 @@ dependencies {
     implementation(libs.shizuku.provider)
     implementation(libs.hiddenapibypass)
     testImplementation(libs.junit)
+    // The real org.json for JVM tests (android.jar's is a stub): Jellyfin answers are parsed with it.
+    testImplementation(libs.json)
     debugImplementation(libs.androidx.compose.ui.tooling)
 }
