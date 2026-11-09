@@ -70,6 +70,8 @@ import net.prototux.aare.audio.PlaybackCaptureSource
 import net.prototux.aare.audio.ShizukuSource
 import net.prototux.aare.audio.SuSource
 import net.prototux.aare.audio.MicRouter
+import net.prototux.aare.aap.pcm.PcmFormat
+import net.prototux.aare.player.CarPlayerAudio
 import net.prototux.aare.R
 import net.prototux.aare.host.CarRuntime
 import net.prototux.aare.media.MediaHub
@@ -546,10 +548,19 @@ class CarSession(
 
     private val audioListener = object : AudioChannel.Listener {
         override fun onAudioReady(channel: AudioChannel, config: aap_protobuf.service.media.shared.message.AudioConfigurationOuterClass.AudioConfiguration) {
-            if (!settings.carAudio) return
             if (channel.streamType != AudioStreamType.AUDIO_STREAM_MEDIA && channel.streamType != AudioStreamType.AUDIO_STREAM_GUIDANCE) return
             if (!isPrimary(channel)) return
-            main.post { startAudio(channel) }
+            main.post {
+                if (closed) return@post
+                // AARE's own video player needs no capture: its sound takes the media channel while it's open.
+                if (channel.streamType == AudioStreamType.AUDIO_STREAM_MEDIA) {
+                    mediaChannel = channel
+                    CarPlayerAudio.mediaFormat = PcmFormat(config.samplingRate, config.numberOfChannels)
+                    CarPlayerAudio.listener = playerAudioListener
+                    if (CarPlayerAudio.active) { startPlayerAudio(channel); return@post }
+                }
+                if (settings.carAudio) startAudio(channel)
+            }
         }
         override fun onUnderflow(channel: AudioChannel) { if (isPrimary(channel)) audioOuts[channel.streamType]?.onUnderflow() }
     }
@@ -607,6 +618,31 @@ class CarSession(
                 failedCapture += method
                 startAudio(channel)
             }
+        })
+        audioOuts[channel.streamType] = out.also { it.start() }
+    }
+
+    /** The car's media channel, once set up (main thread). */
+    private var mediaChannel: AudioChannel? = null
+
+    /** AARE's video player opened or closed: its sound takes the media channel, or the capture comes back. */
+    private val playerAudioListener: () -> Unit = {
+        main.post {
+            val ch = mediaChannel
+            if (!closed && ch != null) {
+                audioOuts.remove(AudioStreamType.AUDIO_STREAM_MEDIA)?.stop()
+                if (CarPlayerAudio.active) startPlayerAudio(ch) else if (settings.carAudio) startAudio(ch)
+            }
+        }
+    }
+
+    private fun startPlayerAudio(channel: AudioChannel) {
+        val cfg = channel.config ?: return
+        audioOuts.remove(channel.streamType)?.stop()
+        DiagLog.add("car video: the player's sound goes to the car's media channel (${cfg.samplingRate} Hz x ${cfg.numberOfChannels})")
+        lateinit var out: CarAudioOut
+        out = CarAudioOut(CarPlayerAudio.Source(PcmFormat(cfg.samplingRate, cfg.numberOfChannels)), channel, mediaFocusRequests, onFailed = {
+            main.post { if (audioOuts.remove(channel.streamType, out)) DiagLog.add("car video: the player's sound stream stopped") }
         })
         audioOuts[channel.streamType] = out.also { it.start() }
     }
@@ -732,6 +768,8 @@ class CarSession(
         closed = true
         net.prototux.aare.notify.CarNotificationListener.sink = null
         audioOuts.values.forEach { it.stop() }; audioOuts.clear()
+        if (CarPlayerAudio.listener === playerAudioListener) { CarPlayerAudio.listener = null; CarPlayerAudio.mediaFormat = null }
+        mediaChannel = null
         phoneBridge?.stop(); phoneBridge = null
         locationFeed.stop()
         drivingMode.stop()
