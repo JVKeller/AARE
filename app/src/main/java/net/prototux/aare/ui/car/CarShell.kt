@@ -1,5 +1,6 @@
 package net.prototux.aare.ui.car
 
+import android.os.SystemClock
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -525,8 +526,20 @@ private fun MediaCard(state: CarUiState, actions: CarActions, compact: Boolean, 
                 content()
                 Spacer(Modifier.height(12.dp))
                 if (np != null && np.durationMs > 0) {
+                    // Apps report the position only when playback changes; run it on by the clock like the full player.
+                    var now by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
+                    LaunchedEffect(np.playing, np.updatedAtMs) {
+                        now = SystemClock.elapsedRealtime()
+                        while (np.playing) {
+                            delay(1_000)
+                            now = SystemClock.elapsedRealtime()
+                        }
+                    }
                     LinearProgressIndicator(
-                        progress = { (np.positionMs.toFloat() / np.durationMs).coerceIn(0f, 1f) },
+                        progress = {
+                            val pos = if (np.playing) np.positionMs + (now - np.updatedAtMs) else np.positionMs
+                            (pos.toFloat() / np.durationMs).coerceIn(0f, 1f)
+                        },
                         modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
                     )
                     Spacer(Modifier.height(12.dp))
