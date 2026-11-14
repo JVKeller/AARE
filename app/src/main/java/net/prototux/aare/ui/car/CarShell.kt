@@ -444,7 +444,7 @@ private fun DashSlot(
     when (card) {
         DashCard.MAP -> NavCard(state, actions, navMap, modifier)
         DashCard.MEDIA -> MediaCard(state, actions, compact = compact, modifier = modifier)
-        DashCard.CALENDAR -> state.nextEvent?.let { event -> Card(modifier) { CalendarCard(event, actions::navigateTo, Modifier.fillMaxSize()) } }
+        DashCard.CALENDAR -> state.nextEvent?.let { event -> Card(modifier) { CalendarCard(event, actions::navigateTo, { actions.dismissEvent(event) }, Modifier.fillMaxSize()) } }
         DashCard.NOTIFICATION -> state.history.firstOrNull()?.let { latest ->
             Card(modifier, onClick = { state.apps.firstOrNull { it.kind == CarAppKind.NOTIFICATIONS }?.let(actions::openApp) }) {
                 LatestNotification(latest, state.drivingRestricted)
