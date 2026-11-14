@@ -21,6 +21,7 @@ import net.prototux.aare.aap.wireless.AA_WIRELESS_UUID
 import net.prototux.aare.aap.wireless.JoinResult
 import net.prototux.aare.aap.wireless.WifiCredentials
 import net.prototux.aare.aap.wireless.WirelessBootstrap
+import net.prototux.aare.aap.wireless.WirelessRetryPolicy
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
@@ -61,6 +62,8 @@ class WirelessConnector(context: Context, private val log: AapLog, private val o
         /** Pin the BSSID the head unit sent: lets Android skip the approval dialog next time. */
         val matchBssid: Boolean = true,
         val bootstrap: WirelessBootstrap.Options = WirelessBootstrap.Options(),
+        /** Reports step changes to the caller's retry/ACL state machine. */
+        val onStage: (WirelessRetryPolicy.Stage) -> Unit = {},
     )
 
     private val context = context.applicationContext
@@ -208,12 +211,14 @@ class WirelessConnector(context: Context, private val log: AapLog, private val o
         }
 
         private fun openRfcomm(adapter: BluetoothAdapter): BluetoothSocket {
+            options.onStage(WirelessRetryPolicy.Stage.RFCOMM)
             // An ongoing discovery slows connections down a lot. Needs BLUETOOTH_SCAN on 12+.
             try {
                 adapter.cancelDiscovery()
             } catch (e: SecurityException) {
                 log.d("wireless: cannot cancel discovery: $e")
             }
+            val label = WirelessAutoStarter.deviceLabel(device)
             var last: IOException? = null
             for (attempt in 1..options.rfcommAttempts) {
                 checkNotAborted()
@@ -221,14 +226,15 @@ class WirelessConnector(context: Context, private val log: AapLog, private val o
                 // UUID is resolved over SDP by connect().
                 val socket = device.createRfcommSocketToServiceRecord(AA_UUID)
                 rfcomm = socket
+                val startNs = System.nanoTime()
                 try {
                     socket.connect()
-                    log.i("wireless: RFCOMM connected to ${device.address}")
+                    log.i("wireless: RFCOMM connected to $label in ${elapsedMs(startNs)} ms")
                     return socket
                 } catch (e: IOException) {
                     last = e
                     runCatching { socket.close() }
-                    log.w("wireless: RFCOMM attempt $attempt/${options.rfcommAttempts} to ${device.address} failed: ${e.message}")
+                    log.w("wireless: RFCOMM attempt $attempt/${options.rfcommAttempts} to $label failed after ${elapsedMs(startNs)} ms: ${e.message}")
                     if (attempt < options.rfcommAttempts) Thread.sleep(1_000L * attempt)
                 }
             }
@@ -238,10 +244,27 @@ class WirelessConnector(context: Context, private val log: AapLog, private val o
 
         /** Runs the RFCOMM exchange on its own thread, which then keeps the link for the session. */
         private fun bootstrap(socket: BluetoothSocket, net: HeadUnitNetwork): Pair<String, Int> {
+            options.onStage(WirelessRetryPolicy.Stage.WPP_NEGOTIATING)
+            val wppStartNs = System.nanoTime()
             val ready = CompletableFuture<Pair<String, Int>>()
             val b = WirelessBootstrap(socket.inputStream, socket.outputStream, object : WirelessBootstrap.Listener {
-                override fun connectWifi(credentials: WifiCredentials): JoinResult = net.join(credentials)
+                override fun connectWifi(credentials: WifiCredentials): JoinResult {
+                    options.onStage(WirelessRetryPolicy.Stage.WIFI_JOINING)
+                    log.i("wireless: WPP negotiated in ${elapsedMs(wppStartNs)} ms; joining Wi-Fi $credentials")
+                    val wifiStartNs = System.nanoTime()
+                    val res = net.join(credentials)
+                    val wifiMs = elapsedMs(wifiStartNs)
+                    when (res) {
+                        is JoinResult.Joined ->
+                            log.i("wireless: Wi-Fi join callback Joined in $wifiMs ms (ip=${res.localAddress ?: "?"}, gw=${res.gateway ?: "?"})")
+                        is JoinResult.Failed ->
+                            log.w("wireless: Wi-Fi join callback Failed after $wifiMs ms (status=${res.status}): ${res.message}")
+                    }
+                    return res
+                }
+
                 override fun onReady(ip: String, port: Int) {
+                    log.i("wireless: WPP bootstrap completed in ${elapsedMs(wppStartNs)} ms -> $ip:$port")
                     ready.complete(ip to port)
                 }
             }, log, options.bootstrap)
@@ -268,6 +291,7 @@ class WirelessConnector(context: Context, private val log: AapLog, private val o
         }
 
         private fun connectTcp(network: Network, ip: String, port: Int): Socket {
+            options.onStage(WirelessRetryPolicy.Stage.TCP_CONNECTING)
             // Literal addresses need no DNS; resolve anything else on the head unit's network.
             val address = runCatching {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) InetAddresses.parseNumericAddress(ip)
@@ -279,20 +303,38 @@ class WirelessConnector(context: Context, private val log: AapLog, private val o
             for (attempt in 1..options.tcpAttempts) {
                 checkNotAborted()
                 // Bound to the head unit's network: it is not the default network (no internet).
-                val socket = network.socketFactory.createSocket()
+                val socket = try {
+                    network.socketFactory.createSocket()
+                } catch (e: IOException) {
+                    // EPERM here: a VPN that doesn't let apps bypass it (Tailscale, WireGuard, a work
+                    // VPN...) keeps AARE off every other network, the car's Wi-Fi included.
+                    if (e.message?.contains("EPERM") == true && vpnActive()) {
+                        throw WirelessException("a VPN is on and blocks AARE from the car's Wi-Fi: turn it off, or exclude AARE in the VPN app (split tunneling)", e)
+                    }
+                    throw e
+                }
                 tcp = socket
+                val startNs = System.nanoTime()
                 try {
                     socket.connect(InetSocketAddress(address, port), options.tcpConnectTimeoutMs)
+                    log.i("wireless: TCP connected to $ip:$port in ${elapsedMs(startNs)} ms (attempt $attempt/${options.tcpAttempts})")
                     return socket
                 } catch (e: IOException) {
                     last = e
                     runCatching { socket.close() }
-                    log.w("wireless: TCP attempt $attempt/${options.tcpAttempts} to $ip:$port failed: ${e.message}")
+                    log.w("wireless: TCP attempt $attempt/${options.tcpAttempts} to $ip:$port failed after ${elapsedMs(startNs)} ms: ${e.message}")
                     if (attempt < options.tcpAttempts) Thread.sleep(1_000)
                 }
             }
             throw WirelessException("cannot connect to the head unit's Android Auto server at $ip:$port", last)
         }
+
+        private fun vpnActive(): Boolean = runCatching {
+            val cm = context.getSystemService(android.net.ConnectivityManager::class.java)
+            cm.allNetworks.any { cm.getNetworkCapabilities(it)?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN) == true }
+        }.getOrDefault(false)
+
+        private fun elapsedMs(startNs: Long): Long = (System.nanoTime() - startNs) / 1_000_000
 
         private fun checkNotAborted() {
             if (aborted.get()) throw WirelessException("cancelled")
