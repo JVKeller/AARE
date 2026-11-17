@@ -55,9 +55,10 @@ object CarHardwareResults {
     /**
      * The result for [type], or null for "not supported". [location] and [heading] are the
      * runtime's car GPS and compass (null when the car hasn't sent them, as before: apps such as
-     * CoMaps then keep the phone's own sensors).
+     * CoMaps then keep the phone's own sensors). [locationShared] false: the user turned off
+     * "Use the car's GPS", so the car's GPS is "not supported".
      */
-    fun build(type: Int, s: CarData.State, location: Location?, heading: Float?): Any? {
+    fun build(type: Int, s: CarData.State, location: Location?, heading: Float?, locationShared: Boolean = true): Any? {
         if (!s.connected && type != CAR_LOCATION && type != COMPASS) return null
         return when (type) {
             MODEL -> s.identity?.let { id ->
@@ -98,7 +99,14 @@ object CarHardwareResults {
                 val values = if (c?.pitchDeg != null && c.rollDeg != null) listOf(h, c.pitchDeg, c.rollDeg) else listOf(h)
                 Compass(CarValue(values, s.compass?.atMillis ?: now(), CarValue.STATUS_SUCCESS))
             }
-            CAR_LOCATION -> location?.let { CarHardwareLocation(CarValue(it, now(), CarValue.STATUS_SUCCESS)) }
+            CAR_LOCATION -> when {
+                !locationShared -> null
+                location != null -> CarHardwareLocation(CarValue(location, now(), CarValue.STATUS_SUCCESS))
+                // The car has GPS but no fix yet: "not yet", not "not supported", which CoMaps
+                // takes as final and stops listening for the rest of the drive.
+                s.has(SensorType.SENSOR_LOCATION) -> CarHardwareLocation(unavailable())
+                else -> null
+            }
             else -> null
         }
     }

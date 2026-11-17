@@ -592,10 +592,16 @@ class CarAppConnection(
         }
     }
 
-    /** Pushes fresh car GPS/compass values to subscribed apps (called by the runtime on sensor updates). */
-    fun carSensorsChanged() {
+    /**
+     * Pushes fresh car GPS and/or compass values to subscribed apps (called by the runtime on
+     * sensor updates). Only what changed: re-sending the last position on every compass update
+     * makes apps that compare providers (CoMaps) count a stale fix again.
+     */
+    fun carSensorsChanged(location: Boolean, compass: Boolean) {
         val subs = synchronized(hardwareSubscriptions) { hardwareSubscriptions.toMap() }
-        for ((type, cb) in subs) if (type == CarHardwareResults.COMPASS || type == CarHardwareResults.CAR_LOCATION) deliverHardware(type, cb)
+        for ((type, cb) in subs) {
+            if ((location && type == CarHardwareResults.CAR_LOCATION) || (compass && type == CarHardwareResults.COMPASS)) deliverHardware(type, cb)
+        }
     }
 
     private fun deliverHardware(type: Int, cb: ICarHardwareResult) {
@@ -603,7 +609,7 @@ class CarAppConnection(
         val result = if (type == CarHardwareResults.CAR_LOCATION && !hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)) {
             log("car location refused: ACCESS_FINE_LOCATION not granted")
             null
-        } else runCatching { CarHardwareResults.build(type, CarData.state.value, env.carLocation, env.carHeading) }
+        } else runCatching { CarHardwareResults.build(type, CarData.state.value, env.carLocation, env.carHeading, env.carLocationShared) }
             .onFailure { Log.w(TAG, "hardware result $type: $it") }.getOrNull()
         runCatching {
             if (result != null) cb.onCarHardwareResult(type, true, Bundleable.create(result), LoggingDone.asBinder())

@@ -43,6 +43,13 @@ interface HostEnvironment {
     /** Latest location from the car's GPS, if it has one. Any thread. */
     val carLocation: Location?
 
+    /**
+     * False when the user turned off "Use the car's GPS": apps are told the car has no GPS, so
+     * they keep the phone's own. Navigation apps that take both (CoMaps, Organic Maps) otherwise
+     * switch between the two every few seconds. Any thread.
+     */
+    val carLocationShared: Boolean get() = true
+
     /** Latest heading from the car's compass (degrees), if any. Any thread. */
     val carHeading: Float?
 }

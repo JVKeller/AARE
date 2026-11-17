@@ -667,11 +667,17 @@ class CarSession(
 
     /** The car's GPS as the phone's location, so apps don't mix two positions. */
     private val locationFeed = PhoneLocationFeed(context)
+    @Volatile private var firstFixLogged = false
 
     private val sensorListener = object : SensorChannel.Listener {
         override fun onSensors(batch: SensorBatch) {
             CarData.update(batch) // every sensor, for car apps and the assistant
-            var carSensors = false
+            // "Use the car's GPS" off: car apps keep the phone's GPS too. A change mid-drive is pushed below.
+            val shared = settings.carGpsForPhone
+            val sharingChanged = shared != runtime.carLocationShared
+            runtime.carLocationShared = shared
+            var location = sharingChanged
+            var compass = false
             batch.locationDataList.lastOrNull()?.let { l ->
                 runtime.carLocation = Location("car").apply {
                     latitude = l.latitudeE7 / 1e7
@@ -684,12 +690,16 @@ class CarSession(
                     elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
                 }.also {
                     // Turned off mid-drive: give the phone its own GPS back now, not at the disconnect.
-                    if (settings.carGpsForPhone) locationFeed.push(it) else locationFeed.stop()
+                    if (shared) locationFeed.push(it) else locationFeed.stop()
+                    if (!firstFixLogged) {
+                        firstFixLogged = true
+                        DiagLog.add("car gps: first fix, accuracy ${if (l.hasAccuracyE3()) "${l.accuracyE3 / 1e3f} m" else "not given"}, ${if (shared) "shared with car apps" else "not shared (Use the car's GPS is off)"}")
+                    }
                 }
-                carSensors = true
+                location = true
             }
-            batch.compassDataList.lastOrNull()?.let { runtime.carHeading = it.bearingE6 / 1e6f; carSensors = true }
-            if (carSensors) runtime.carSensorsChanged()
+            batch.compassDataList.lastOrNull()?.let { runtime.carHeading = it.bearingE6 / 1e6f; compass = true }
+            if (location || compass) runtime.carSensorsChanged(location, compass)
             batch.nightModeDataList.lastOrNull()?.let { n ->
                 main.post { runtime.carNightMode(n.nightMode) }
             }
