@@ -63,6 +63,9 @@ object CarAppCatalog {
         return found.mapNotNull { ri ->
             val si = ri.serviceInfo ?: return@mapNotNull null
             if (si.packageName == context.packageName) return@mapNotNull null
+            // Some car services only let Android Auto bind them (Google's own Assistant, behind
+            // gearhead's START_PROJECTED_ACTIVITY): listed, they would only ever fail to start.
+            if (si.permission != null && context.checkSelfPermission(si.permission) != PackageManager.PERMISSION_GRANTED) return@mapNotNull null
             val categories = buildSet {
                 ri.filter?.categoriesIterator()?.forEach { add(it) }
             }
