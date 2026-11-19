@@ -119,6 +119,7 @@ class CarRuntime(
     var touchscreen by mutableStateOf(true)
     @Volatile override var carLocation: Location? = null
     @Volatile override var carHeading: Float? = null
+    @Volatile override var carLocationShared: Boolean = true
 
     override fun contentLimit(type: Int): Int = when (type) {
         // Android Auto's usual limits: generous when parked, shorter lists while driving.
@@ -571,8 +572,9 @@ class CarRuntime(
         } else visibleCount[conn] = n
     }
 
-    /** Pushes car GPS/compass to subscribed apps. Any thread. */
-    fun carSensorsChanged() = main.post { connections.values.forEach { it.carSensorsChanged() } }
+    /** Pushes the car's GPS ([location]) and/or compass ([compass]) to subscribed apps. Any thread. */
+    fun carSensorsChanged(location: Boolean, compass: Boolean) =
+        main.post { connections.values.forEach { it.carSensorsChanged(location, compass) } }
 
     /** Night mode or screen size changed: tell running apps. */
     fun configurationChanged() {
