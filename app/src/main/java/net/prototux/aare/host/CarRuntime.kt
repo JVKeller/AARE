@@ -588,14 +588,21 @@ class CarRuntime(
     private var noticeSeq = 0L
 
     /** Keeps a notification (a message) for the notification centre. */
-    fun remember(title: String, text: String, icon: Bitmap?, actions: List<Pair<String, () -> Unit>>) {
-        ui.history.add(0, CarNotice("h${++noticeSeq}", title, text, icon, actions))
+    fun remember(title: String, text: String, icon: Bitmap?, actions: List<Pair<String, () -> Unit>>, source: String? = null) {
+        ui.history.add(0, CarNotice("h${++noticeSeq}", title, text, icon, actions, message = source != null, source = source))
         while (ui.history.size > 30) ui.history.removeAt(ui.history.lastIndex)
         if ((ui.screen as? CarScreen.App)?.appId != NOTIFICATIONS_ID) ui.unseen++
     }
 
-    fun notice(title: String, text: String, icon: Bitmap? = null, durationMs: Long = 4_000, actions: List<Pair<String, () -> Unit>> = emptyList(), message: Boolean = false) {
-        val n = CarNotice("n${++noticeSeq}", title, text, icon, actions, message = message)
+    /** The phone notification [source] was read or removed: drop its entries from the notification centre. */
+    fun forget(source: String) {
+        ui.history.removeAll { it.source == source }
+        // Its banner too, if still up.
+        ui.notices.removeAll { it.source == source }
+    }
+
+    fun notice(title: String, text: String, icon: Bitmap? = null, durationMs: Long = 4_000, actions: List<Pair<String, () -> Unit>> = emptyList(), message: Boolean = false, source: String? = null) {
+        val n = CarNotice("n${++noticeSeq}", title, text, icon, actions, message = message, source = source)
         ui.notices.add(n)
         main.postDelayed({ ui.notices.remove(n) }, durationMs)
     }

@@ -178,7 +178,7 @@ private fun ConversationView(c: Conversation, driving: Boolean, onReply: () -> U
         }
         Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Pill(stringResource(R.string.msg_action_read_aloud), selected = true, icon = Icons.Rounded.RecordVoiceOver, onClick = { listener?.readAloud(c) })
-            c.markRead?.let { pi -> Pill(stringResource(R.string.msg_action_mark_read), selected = false, icon = Icons.Rounded.DoneAll, onClick = { runCatching { pi.send() }; onMarkedRead() }) }
+            c.markRead?.let { pi -> Pill(stringResource(R.string.msg_action_mark_read), selected = false, icon = Icons.Rounded.DoneAll, onClick = { listener?.markRead(c.key, pi) ?: runCatching { pi.send() }; onMarkedRead() }) }
             if (c.canReply && !driving) Pill(stringResource(R.string.msg_action_reply), selected = false, icon = Icons.AutoMirrored.Rounded.Reply, onClick = onReply)
         }
     }

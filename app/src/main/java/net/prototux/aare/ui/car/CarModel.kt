@@ -57,6 +57,8 @@ class CarNotice(
     val timeMs: Long = System.currentTimeMillis(),
     /** A message from a contact: its text is hidden while driving, like in the messaging screens. */
     val message: Boolean = false,
+    /** The phone notification it came from, so it goes away once read. */
+    val source: String? = null,
 )
 
 /** Head-unit geometry: the drawable area inside the video margins, and the rail side. */

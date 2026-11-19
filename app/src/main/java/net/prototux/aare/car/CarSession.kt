@@ -335,11 +335,12 @@ class CarSession(
             net.prototux.aare.notify.CarNotificationListener.sink = { m ->
                 drivingMode.onMessage(m.key, m.group)
                 if (!m.group || settings.groupMessages) {
-                    runtime.remember(m.title, m.text, m.icon, m.actions)
-                    if (settings.messageBanners) runtime.notice(m.title, m.text, m.icon, 10_000, m.actions, message = true)
+                    runtime.remember(m.title, m.text, m.icon, m.actions, source = m.key)
+                    if (settings.messageBanners) runtime.notice(m.title, m.text, m.icon, 10_000, m.actions, message = true, source = m.key)
                     if (settings.readMessagesAloud) m.readAloud()
                 }
             }
+            net.prototux.aare.notify.CarNotificationListener.removed = { key -> runtime.forget(key) }
             if (settings.resumeMedia) runtime.resumeMedia()
             startPlaybackStatus()
             phoneBridge = PhoneStatusBridge(context, aap, phoneStatus).also { it.start() }
@@ -1137,6 +1138,7 @@ class CarSession(
         main.removeCallbacks(videoFocusCheck)
         CarFocusVisibility.rotary = false // the next car may have no knob
         net.prototux.aare.notify.CarNotificationListener.sink = null
+        net.prototux.aare.notify.CarNotificationListener.removed = null
         audioOuts.values.forEach { it.stop() }; audioOuts.clear()
         readyAudio.clear(); audioMethods.clear()
         phoneMute.set(false)

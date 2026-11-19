@@ -91,6 +91,8 @@ class CarNotificationListener : NotificationListenerService() {
 
     override fun onNotificationRemoved(sbn: StatusBarNotification) {
         _changes.update { it + 1 }
+        // Read on the phone, or marked read: the car's notification centre lets it go too.
+        removed?.invoke(sbn.key)
         if (sbn.key == callerKey) { callerKey = null; _caller.value = null }
         if (sbn.key == _guidance.value?.key) refreshGuidance()
     }
@@ -123,7 +125,7 @@ class CarNotificationListener : NotificationListenerService() {
         if (last.fromUser) return
         val actions = buildList<Pair<String, () -> Unit>> {
             add(getString(R.string.msg_action_read_aloud) to { speak(if (last.sender.isNotEmpty()) "${last.sender}. ${last.text}" else last.text) })
-            c.markRead?.let { pi -> add(getString(R.string.msg_action_mark_read) to { runCatching { pi.send() } }) }
+            if (c.markRead != null) add(getString(R.string.msg_action_mark_read) to { markRead(sbn.key, c.markRead) })
         }
         val app = runCatching { packageManager.getApplicationLabel(packageManager.getApplicationInfo(sbn.packageName, 0)).toString() }.getOrDefault(sbn.packageName)
         val title = if (last.sender.isNotEmpty() && last.sender != c.title) "${c.title} · ${last.sender}" else c.title.ifEmpty { app }
@@ -152,6 +154,18 @@ class CarNotificationListener : NotificationListenerService() {
             .sortedByDescending { it.timeMs }
 
     fun readAloud(c: Conversation) = speak(c.spoken())
+
+    /**
+     * Marks the conversation read, with the action of the notification as it is now (apps re-post
+     * it, and some cancel the old action's intent), and drops it from the notification centre even
+     * if the app keeps its notification up.
+     */
+    fun markRead(key: String, fallback: PendingIntent) {
+        val current = runCatching { activeNotifications }.getOrNull().orEmpty().firstOrNull { it.key == key }
+            ?.let { actionWith(it.notification, NotificationCompat.Action.SEMANTIC_ACTION_MARK_AS_READ)?.actionIntent }
+        runCatching { (current ?: fallback).send() }.onFailure { Log.w(TAG, "mark as read failed: $it") }
+        removed?.invoke(key)
+    }
 
     /** The newest guidance notification still showing, if any. */
     private fun refreshGuidance() {
@@ -248,6 +262,9 @@ class CarNotificationListener : NotificationListenerService() {
 
         /** Set by the car session while connected; called on the main thread. */
         @Volatile var sink: ((Message) -> Unit)? = null
+
+        /** Set by the car session: a conversation (by notification key) was read or went away; main thread. */
+        @Volatile var removed: ((String) -> Unit)? = null
 
         private val _guidance = MutableStateFlow<PhoneGuidance?>(null)
         /** Turn-by-turn from a navigation app running on the phone (Google Maps, Waze…). */
