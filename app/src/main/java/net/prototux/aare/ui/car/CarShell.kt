@@ -686,7 +686,8 @@ internal fun NoticeOverlay(state: CarUiState, actions: CarActions, modifier: Mod
         actions.dismissNotice(notice)
     }
     Row(
-        modifier.padding(16.dp).fillMaxWidth(0.6f).clip(MaterialTheme.shapes.large)
+        // Floats over the screen like the call strip: a knob tilt reaches it by its centre.
+        modifier.padding(16.dp).fillMaxWidth(0.6f).clip(MaterialTheme.shapes.large).rotaryArea(floating = true)
             .background(MaterialTheme.colorScheme.surfaceContainerHighest).padding(16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
