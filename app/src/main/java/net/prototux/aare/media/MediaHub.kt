@@ -60,6 +60,14 @@ interface MediaHub {
     @Composable
     fun Screen(app: MediaApp, driving: Boolean, modifier: Modifier)
 
+    /** A media view wants the whole car screen, rail included (the full-screen visualizer): show [FullScreen] over everything. */
+    val fullScreen: Boolean get() = false
+    fun exitFullScreen() {}
+
+    /** The whole-screen view while [fullScreen]; any tap leaves it. The host routes Back and the knob to [exitFullScreen]. */
+    @Composable
+    fun FullScreen(driving: Boolean, modifier: Modifier) {}
+
     /** Disconnects everything. */
     fun release()
 }

@@ -358,6 +358,12 @@ class CarAppConnection(
             surface?.let { sendSurface() }
         } else if (!visible && started) {
             started = false
+            // Like Android Auto: the map surface goes before the app stops, and comes back as a new
+            // onSurfaceAvailable when it starts again. Apps that tear down their renderer on stop
+            // (Vela) otherwise ignore the same surface offered again and stay blank.
+            val container = surface
+            val cb = surfaceCallback
+            if (container != null && cb != null) call("onSurfaceDestroyed") { cb.onSurfaceDestroyed(Bundleable.create(container), it) }
             call("onAppPause") { app.onAppPause(it) }
             call("onAppStop") { app.onAppStop(it) }
         }

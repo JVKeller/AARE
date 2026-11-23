@@ -57,6 +57,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Apps
 import androidx.compose.material.icons.rounded.Bluetooth
@@ -180,7 +181,7 @@ class MainActivity : ComponentActivity() {
 }
 
 /** The settings pages, Android Auto style: one per topic, opened from the home page. */
-private enum class Page(val titleRes: Int, val subtitleRes: Int, val icon: ImageVector) {
+private enum class Page(val titleRes: Int, val subtitleRes: Int, val icon: ImageVector, val parent: Page? = null) {
     CAR_SCREEN(R.string.setup_page_car_screen_title, R.string.setup_page_car_screen_subtitle, Icons.Rounded.Dashboard),
     APPS(R.string.setup_page_apps_title, R.string.setup_page_apps_subtitle, Icons.Rounded.Apps),
     ASSISTANT(R.string.assistant_settings_title, R.string.assistant_page_subtitle, Icons.Rounded.Mic),
@@ -190,6 +191,8 @@ private enum class Page(val titleRes: Int, val subtitleRes: Int, val icon: Image
     CAR_DATA(R.string.setup_page_car_data_title, R.string.setup_page_car_data_subtitle, Icons.Rounded.DirectionsCar),
     ADVANCED(R.string.setup_page_advanced_title, R.string.setup_page_advanced_subtitle, Icons.Rounded.Tune),
     ABOUT(R.string.setup_page_about_title, R.string.setup_page_about_subtitle, Icons.Rounded.Info),
+    /** Opened from [AUDIO], not listed on the home screen. */
+    VISUALS(R.string.visuals_title, R.string.visualizer_toggle_subtitle, Icons.Rounded.GraphicEq, parent = AUDIO),
 }
 
 @Composable
@@ -208,7 +211,7 @@ private fun Home() {
         lifecycle.lifecycle.addObserver(observer)
         onDispose { lifecycle.lifecycle.removeObserver(observer) }
     }
-    BackHandler(enabled = page != null) { page = null }
+    BackHandler(enabled = page != null) { page = page?.parent }
 
     AnimatedContent(page, label = "page", transitionSpec = { fadeIn(tween(150)) togetherWith fadeOut(tween(100)) }) { p ->
         if (p == null) {
@@ -224,14 +227,14 @@ private fun Home() {
                 item { Setup(state, refresh, { refresh++ }) { page = it } }
                 item {
                     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(MaterialTheme.colorScheme.surfaceContainer)) {
-                        Page.entries.forEach { CategoryRow(it) { page = it } }
+                        Page.entries.filter { it.parent == null }.forEach { CategoryRow(it) { page = it } }
                     }
                 }
             }
         } else {
             Column(Modifier.fillMaxSize().systemBarsPadding()) {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = { page = null }) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, stringResource(R.string.common_back)) }
+                    IconButton(onClick = { page = p.parent }) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, stringResource(R.string.common_back)) }
                     Spacer(Modifier.width(8.dp))
                     Text(stringResource(p.titleRes), style = MaterialTheme.typography.titleLarge)
                 }
@@ -245,7 +248,8 @@ private fun Home() {
                         Page.APPS -> item { AppsCard(settings) }
                         Page.ASSISTANT -> item { AssistantCard(settings) }
                         Page.MESSAGES -> item { MessageSettings(settings, refresh) }
-                        Page.AUDIO -> item { AudioSettings(settings, state, refresh) { refresh++ } }
+                        Page.AUDIO -> item { AudioSettings(settings, state, refresh, { refresh++ }) { page = Page.VISUALS } }
+                        Page.VISUALS -> item { VisualizerSection(settings) }
                         Page.CONNECTION -> item { ConnectionSettings(settings, refresh) }
                         Page.CAR_DATA -> item { CarDataCard() }
                         Page.ADVANCED -> {
@@ -821,7 +825,7 @@ private fun decodeWallpaper(context: android.content.Context, uri: Uri, maxPx: I
 
 /** Car audio: the capture methods, best first, and what each needs. */
 @Composable
-private fun AudioSettings(settings: Settings, state: ProjectionService.State, refresh: Int, recheck: () -> Unit) {
+private fun AudioSettings(settings: Settings, state: ProjectionService.State, refresh: Int, recheck: () -> Unit, openVisuals: () -> Unit) {
     val ctx = LocalContext.current
     var enabled by remember { mutableStateOf(settings.carAudio) }
     var keepNotifications by remember { mutableStateOf(settings.keepNotificationsWhileCapturing) }
@@ -856,7 +860,6 @@ private fun AudioSettings(settings: Settings, state: ProjectionService.State, re
             Text(best?.let { stringResource(R.string.audio_using_method, stringResource(it.title)) } ?: stringResource(R.string.audio_no_method),
                 style = MaterialTheme.typography.bodyMedium, color = if (best == null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
         }
-        CarVoiceSection(settings, refresh)
         Section(stringResource(R.string.audio_section_methods)) {
             Check(stringResource(CaptureMethod.AUDIO_POLICY.title),
                 if (policy) stringResource(R.string.audio_policy_ready)
@@ -913,10 +916,91 @@ private fun AudioSettings(settings: Settings, state: ProjectionService.State, re
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
+        // Under the capture method they need: navigation voice, then the visuals.
+        CarVoiceSection(settings, refresh)
+        Section(stringResource(R.string.visuals_title)) {
+            val on = net.prototux.aare.media.NowPlayingVisuals.byId(settings.nowPlayingVisual) != null
+            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable(onClick = openVisuals).padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(stringResource(R.string.visualizer_toggle_title), style = MaterialTheme.typography.bodyLarge)
+                    Text(if (on) stringResource(R.string.visuals_entry_on, stringResource(R.string.visualizer_toggle_title)) else stringResource(R.string.visuals_entry_off),
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
     }
 }
 
 private const val SHIZUKU_REQUEST = 42
+
+/** The now-playing visualizer: on/off, full screen, colors and its delay against the car's sound. */
+@Composable
+private fun VisualizerSection(settings: Settings) {
+    var enabled by remember { mutableStateOf(settings.nowPlayingVisual != Settings.VISUAL_OFF) }
+    var full by remember { mutableStateOf(settings.visualizerFullScreen) }
+    var colors by remember { mutableStateOf(settings.visualizerColors) }
+    var delayMs by remember { mutableIntStateOf(settings.visualizerDelayMs) }
+    var bars by remember { mutableStateOf(settings.visualizerBars) }
+    var opacity by remember { mutableIntStateOf(settings.visualizerOpacityPct) }
+    var peaks by remember { mutableStateOf(settings.visualizerPeaks) }
+    var fall by remember { mutableStateOf(settings.visualizerFall) }
+    var art by remember { mutableStateOf(settings.visualizerArtBackground) }
+    Section(stringResource(R.string.visualizer_section)) {
+        Toggle(stringResource(R.string.visualizer_toggle_title), stringResource(R.string.visualizer_toggle_subtitle), enabled) {
+            enabled = it; settings.nowPlayingVisual = if (it) Settings.VISUAL_SPECTRUM else Settings.VISUAL_OFF
+        }
+        if (!enabled) return@Section
+        Toggle(stringResource(R.string.visualizer_full_screen), stringResource(R.string.visualizer_full_screen_subtitle), full) {
+            full = it; settings.visualizerFullScreen = it
+        }
+        Toggle(stringResource(R.string.visualizer_art_background), stringResource(R.string.visualizer_art_background_subtitle), art) {
+            art = it; settings.visualizerArtBackground = it
+        }
+        Choices(stringResource(R.string.visualizer_bars_title), listOf(
+            Settings.VISUAL_BARS_SEGMENTED to stringResource(R.string.visualizer_bars_segmented),
+            Settings.VISUAL_BARS_SOLID to stringResource(R.string.visualizer_bars_solid),
+        ), bars) { bars = it; settings.visualizerBars = it }
+        Choices(stringResource(R.string.visualizer_colors_title), listOf(
+            Settings.VISUAL_COLORS_SPECTRAL to stringResource(R.string.visualizer_colors_spectral),
+            Settings.VISUAL_COLORS_SYSTEM to stringResource(R.string.visualizer_colors_system),
+        ), colors) { colors = it; settings.visualizerColors = it }
+        Toggle(stringResource(R.string.visualizer_peaks), stringResource(R.string.visualizer_peaks_subtitle), peaks) {
+            peaks = it; settings.visualizerPeaks = it
+        }
+        Choices(stringResource(R.string.visualizer_fall_title), listOf(
+            Settings.VISUAL_FALL_SLOW to stringResource(R.string.visualizer_fall_slow),
+            Settings.VISUAL_FALL_NORMAL to stringResource(R.string.visualizer_fall_normal),
+            Settings.VISUAL_FALL_FAST to stringResource(R.string.visualizer_fall_fast),
+        ), fall) { fall = it; settings.visualizerFall = it }
+        Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(stringResource(R.string.visualizer_opacity_title), style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                Text(stringResource(R.string.visualizer_opacity_value, opacity), style = MaterialTheme.typography.bodyMedium)
+            }
+            androidx.compose.material3.Slider(
+                value = opacity.toFloat(),
+                onValueChange = { opacity = Math.round(it / 10f) * 10; settings.visualizerOpacityPct = opacity },
+                valueRange = Settings.VISUAL_OPACITY_MIN.toFloat()..100f,
+                steps = (100 - Settings.VISUAL_OPACITY_MIN) / 10 - 1,
+            )
+        }
+        Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(stringResource(R.string.visualizer_delay_title), style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                Text(stringResource(R.string.visualizer_delay_value, delayMs), style = MaterialTheme.typography.bodyMedium)
+            }
+            // Applied as it moves: a passenger can tune it against the car's sound.
+            androidx.compose.material3.Slider(
+                value = delayMs.toFloat(),
+                onValueChange = { delayMs = Math.round(it / Settings.VISUAL_DELAY_STEP_MS) * Settings.VISUAL_DELAY_STEP_MS; settings.visualizerDelayMs = delayMs },
+                valueRange = 0f..Settings.VISUAL_DELAY_MAX_MS.toFloat(),
+                steps = Settings.VISUAL_DELAY_MAX_MS / Settings.VISUAL_DELAY_STEP_MS - 1,
+            )
+            Text(stringResource(R.string.visualizer_delay_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
 
 /**
  * Navigation voice through AARE's voice engine: whether it's on, whether AARE is the phone's voice

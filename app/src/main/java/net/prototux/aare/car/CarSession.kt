@@ -1,5 +1,6 @@
 package net.prototux.aare.car
 
+import aap_protobuf.service.media.video.message.VideoFocusModeOuterClass.VideoFocusMode
 import aap_protobuf.service.control.message.AudioFocusNotificationOuterClass.AudioFocusNotification
 import aap_protobuf.service.control.message.AudioFocusRequestTypeOuterClass.AudioFocusRequestType
 import aap_protobuf.service.control.message.AudioFocusStateTypeOuterClass.AudioFocusStateType
@@ -382,8 +383,8 @@ class CarSession(
         }
     }
 
-    /** Media paused by an unsolicited transient focus loss, to resume on the next gain (main thread). */
-    private var pausedByCar = false
+    /** Media paused by an unsolicited transient focus loss, to resume on the next gain (written on main). */
+    @Volatile private var pausedByCar = false
 
     override fun onClosed(session: AapSession, reason: String, error: Throwable?) {
         val rejected = session.certificateRefusal
@@ -440,6 +441,10 @@ class CarSession(
                     display?.invalidate()
                 }
             }
+        }
+
+        override fun onVideoFocusMessage(mode: VideoFocusMode, asked: Boolean) {
+            DiagLog.add("video focus: car ${if (asked) "asks for" else "answers"} ${mode.name.removePrefix("VIDEO_FOCUS_")}")
         }
 
         override fun onKeyFrameNeeded() {
@@ -950,8 +955,11 @@ class CarSession(
                 if (playing) mediaFocusRetry.onRequested(SystemClock.uptimeMillis()) else mediaFocusRetry.onWithdrawn()
                 scheduleFocusCheck()
                 if (playing) aap.requestAudioFocus(AudioFocusRequestType.AUDIO_FOCUS_GAIN)
-                // Comes right after the stream's STOP: keep it behind STOP and the last data.
-                else if (!guidancePlaying) aap.requestAudioFocus(AudioFocusRequestType.AUDIO_FOCUS_RELEASE, Priority.AUDIO)
+                // Comes right after the stream's STOP: keep it behind STOP and the last data. Not
+                // while the car has the audio for a while (a call, the phone's mic over Bluetooth):
+                // the music went quiet because we paused it, and the car only hands the focus back,
+                // to play again, to someone still holding a request.
+                else if (!guidancePlaying && !pausedByCar) aap.requestAudioFocus(AudioFocusRequestType.AUDIO_FOCUS_RELEASE, Priority.AUDIO)
             }
         }
         override val granted: Boolean get() = mediaFocus

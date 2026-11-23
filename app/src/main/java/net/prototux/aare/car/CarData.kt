@@ -3,6 +3,7 @@ package net.prototux.aare.car
 import aap_protobuf.service.control.message.ServiceDiscoveryResponseOuterClass.ServiceDiscoveryResponse
 import aap_protobuf.service.sensorsource.message.SensorBatchOuterClass.SensorBatch
 import aap_protobuf.service.sensorsource.message.SensorTypeOuterClass.SensorType
+import net.prototux.aare.DiagLog
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.util.concurrent.CopyOnWriteArrayList
@@ -121,7 +122,29 @@ object CarData {
                 evConnectorTypes = sensors?.supportedEvConnectorTypesList?.map { it.number }.orEmpty(),
             )
         }
+        val id = _state.value.identity
+        DiagLog.add("car: ${id?.make} ${id?.model} ${id?.year ?: ""}".trimEnd() +
+            "; services: ${response.channelsList.joinToString { serviceName(it) }}" +
+            "; sensors: ${_state.value.advertised.sortedBy { it.number }.joinToString { it.name.removePrefix("SENSOR_") }.ifEmpty { "none" }}")
     }
+
+    /** What a discovered service is, for the connection log; vendor extensions with their name. */
+    private fun serviceName(s: aap_protobuf.service.ServiceOuterClass.Service): String = when {
+        s.hasSensorSourceService() -> "sensors"
+        s.hasMediaSinkService() -> "media sink"
+        s.hasInputSourceService() -> "input"
+        s.hasMediaSourceService() -> "microphone"
+        s.hasBluetoothService() -> "bluetooth"
+        s.hasRadioService() -> "radio"
+        s.hasNavigationStatusService() -> "navigation status"
+        s.hasMediaPlaybackService() -> "media playback status"
+        s.hasPhoneStatusService() -> "phone status"
+        s.hasMediaBrowserService() -> "media browser"
+        s.hasVendorExtensionService() -> "vendor extension '${s.vendorExtensionService.name}'"
+        s.hasGenericNotificationService() -> "generic notification"
+        s.hasWifiProjectionService() -> "wifi projection"
+        else -> "unknown"
+    } + "#${s.id}"
 
     /** The car is gone, but only if [owner] still owns it: a session tearing down after a new one already reconnected must not wipe its data. */
     fun reset(owner: Any? = null) {

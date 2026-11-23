@@ -6,6 +6,7 @@ import android.util.Log
 import aap_protobuf.service.media.sink.message.AudioStreamTypeOuterClass.AudioStreamType
 import net.prototux.aare.DiagLog
 import net.prototux.aare.aap.channels.AudioChannel
+import net.prototux.aare.aap.pcm.PcmFormat
 import kotlin.math.abs
 
 /**
@@ -121,6 +122,15 @@ class CarAudioOut(
             queued.addLast(buf.copyOf() to ts)
             while (queued.size > queueLimit) queued.removeFirst()
         }
+        // The visualizer's copy of the music (see PcmTap): only what the car got, when it got it.
+        if (!guidance) PcmTap.open(this, PcmFormat(rate, channels))
+        fun send(b: ByteArray, ts: Long) {
+            if (!channel.sendPcm(b, 10, chunk, ts)) return
+            // Captured to sent: how far the car is behind the phone (connection log, per stream).
+            val lateMs = ((System.nanoTime() / 1_000 - ts) / 1_000 - chunkMs).toLong()
+            if (lateMs > maxLateMs) maxLateMs = lateMs
+            if (!guidance) PcmTap.ring?.write(b, 10, chunk, SystemClock.elapsedRealtime())
+        }
         try {
             while (running) {
                 var got = 0
@@ -147,6 +157,7 @@ class CarAudioOut(
                     playing = false
                     stoppedAtMs = now
                     queued.clear()
+                    if (!guidance) PcmTap.ring?.clear()
                 }
                 if (!playing) continue
                 if (!channel.started) {
@@ -154,7 +165,7 @@ class CarAudioOut(
                     if (!focus.granted) { queue(ts); continue }
                     channel.startPlayback()
                     if (!channel.started) { queue(ts); continue }
-                    startedAtMs = now; maxQueued = queued.size; focusDropped = 0; underflowsAtStart = channel.underflows
+                    startedAtMs = now; maxQueued = queued.size; maxLateMs = 0; focusDropped = 0; underflowsAtStart = channel.underflows
                     // Prompts keep their whole start; media keeps only a little, or it would lag
                     // behind real time (video lip sync) for the whole stream. Use the base backlog,
                     // not a raised one left over from the last stream's underflow.
@@ -170,6 +181,7 @@ class CarAudioOut(
                     channel.stopPlayback()
                     stoppedAtMs = now
                     queued.clear()
+                    if (!guidance) PcmTap.ring?.clear()
                     continue
                 }
                 if (priming) {
@@ -177,22 +189,22 @@ class CarAudioOut(
                     if (queued.size < primeChunks) continue
                     priming = false
                     if (queued.size > maxQueued) maxQueued = queued.size
-                    while (queued.isNotEmpty() && channel.hasRoom) queued.removeFirst().let { (b, t) -> channel.sendPcm(b, 10, chunk, t) }
+                    while (queued.isNotEmpty() && channel.hasRoom) queued.removeFirst().let { (b, t) -> send(b, t) }
                     continue
                 }
                 if (queued.isEmpty() && channel.hasRoom) {
                     // A copy: the writer thread sends the array later, and buf is refilled meanwhile.
-                    channel.sendPcm(buf.copyOf(), 10, chunk, ts)
+                    send(buf.copyOf(), ts)
                     continue
                 }
                 // Catching up: send the backlog in order, as fast as the car's ack window allows.
                 queue(ts)
                 if (queued.size > maxQueued) maxQueued = queued.size
-                while (queued.isNotEmpty() && channel.hasRoom) queued.removeFirst().let { (b, t) -> channel.sendPcm(b, 10, chunk, t) }
+                while (queued.isNotEmpty() && channel.hasRoom) queued.removeFirst().let { (b, t) -> send(b, t) }
                 if (queued.size >= baseBacklog) onCongested(now)
                 // The car stays behind (or never acks): stay close to real time. The oldest goes
                 // through sendPcm so dropped chunks still count towards ack-less detection.
-                while (queued.size > maxBacklog) queued.removeFirst().let { (b, t) -> channel.sendPcm(b, 10, chunk, t) }
+                while (queued.size > maxBacklog) queued.removeFirst().let { (b, t) -> send(b, t) }
             }
         } catch (e: Exception) {
             Log.w(TAG, "audio capture stopped", e)
@@ -200,6 +212,7 @@ class CarAudioOut(
             if (playing) { runCatching { noteStream(SystemClock.elapsedRealtime()); channel.stopPlayback() }; focus.request(false); stoppedAtMs = SystemClock.elapsedRealtime() }
             playing = false
             queued.clear()
+            if (!guidance) PcmTap.close(this)
             source.release()
             if (died) onFailed()
         }
@@ -209,13 +222,15 @@ class CarAudioOut(
     private var maxQueued = 0
     private var focusDropped = 0
     private var underflowsAtStart = 0
+    /** The most a sent chunk was behind its capture this stream, in ms. */
+    private var maxLateMs = 0L
 
     /** One connection-log line per stream: how the car kept up with it. */
     private fun noteStream(now: Long) {
         if (!channel.started) return
         DiagLog.add("car audio ($label): stream ${(now - startedAtMs) / 1000.0} s, sent ${channel.streamSent}, " +
             "${channel.streamAcks} acks, window ${channel.maxUnacked}, longest ack wait ${channel.maxAckGapMs} ms, " +
-            "backlog max $maxQueued, car underflows ${channel.underflows - underflowsAtStart}" +
+            "backlog max $maxQueued, captured-to-sent max $maxLateMs ms, car underflows ${channel.underflows - underflowsAtStart}" +
             if (focusDropped > 0) ", $focusDropped chunks muted (no focus)" else "")
     }
 

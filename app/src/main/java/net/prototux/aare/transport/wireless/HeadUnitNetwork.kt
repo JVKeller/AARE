@@ -59,6 +59,34 @@ internal class HeadUnitNetwork(
     @Volatile private var pending: CompletableFuture<JoinResult>? = null
     @Volatile private var released = false
 
+    /**
+     * Held while on the head unit's network: asks Android to keep the Wi-Fi radio out of power
+     * save. Without it the phone drops into power save as the screen turns off or on (lock and
+     * unlock), and for about a second audio and video to the car stall (2026-11-21 car logs).
+     * Low latency is the mode that works on Android 14+ (high perf is ignored there), but Android
+     * honours it only while the app counts as in the foreground; high perf covers older phones.
+     */
+    private val radioLocks = listOfNotNull(
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) lock(WifiManager.WIFI_MODE_FULL_LOW_LATENCY, "low latency") else null,
+        @Suppress("DEPRECATION") lock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "high perf"),
+    )
+
+    private fun lock(mode: Int, name: String): Pair<WifiManager.WifiLock, String>? =
+        runCatching { wifi?.createWifiLock(mode, "AARE:car")?.apply { setReferenceCounted(false) } }
+            .getOrNull()?.let { it to name }
+
+    private fun holdRadio() {
+        if (released) return
+        val held = radioLocks.mapNotNull { (lock, name) ->
+            runCatching { lock.acquire() }.fold({ name }, { e -> log.w("wireless: Wi-Fi $name lock refused: ${e.message}"); null })
+        }
+        log.i("wireless: holding Wi-Fi out of power save (${held.ifEmpty { listOf("no lock") }.joinToString()})")
+    }
+
+    private fun letRadioGo() {
+        radioLocks.forEach { (lock, _) -> runCatching { if (lock.isHeld) lock.release() } }
+    }
+
     /** Blocks until the phone has an IPv4 address on the head unit's network, or fails. */
     fun join(credentials: WifiCredentials): JoinResult {
         if (released) return JoinResult.Failed(WppStatus.WIFI_NETWORK_UNAVAILABLE, "cancelled")
@@ -127,6 +155,7 @@ internal class HeadUnitNetwork(
     /** Drops the network request (Android then disconnects from the head unit). Idempotent. */
     fun release() {
         released = true
+        letRadioGo()
         pending?.complete(JoinResult.Failed(WppStatus.WIFI_NETWORK_UNAVAILABLE, "cancelled"))
         callback?.let { runCatching { connectivity.unregisterNetworkCallback(it) } }
         callback = null
@@ -279,6 +308,7 @@ internal class HeadUnitNetwork(
     }
 
     private fun joined(lp: LinkProperties): JoinResult.Joined {
+        holdRadio()
         val gateway = lp.routes.firstOrNull { it.isDefaultRoute && it.gateway is Inet4Address }?.gateway
             ?: if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) lp.dhcpServerAddress else null
         return JoinResult.Joined(localAddress = ipv4(lp)?.hostAddress, gateway = gateway?.hostAddress)

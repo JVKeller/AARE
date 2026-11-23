@@ -42,3 +42,32 @@ internal fun List<DashCard>.moved(index: Int, by: Int): List<DashCard> {
     list.add((index + by).coerceIn(0, lastIndex), list.removeAt(index))
     return list
 }
+
+/** How the dashboard arranges its cards for a screen. */
+internal enum class DashLayout { PORTRAIT, NARROW, THREE_COLUMNS, BIG_AND_STACKED }
+
+/**
+ * The layout for a dashboard [width] x [height] (dp) with [gutter] between cards.
+ *
+ * Three cards side by side (like Android Auto on 1920x720) only when the narrowest of them still
+ * gets a sensible card: at least [MIN_SIDE_CARD_WIDTH] wide and not much taller than wide.
+ * Otherwise a wide screen keeps the big card with the others stacked beside it, which suits
+ * screens that are wide but short in dp (a high density, or a tall bar).
+ */
+internal fun dashboardLayout(width: Float, height: Float, gutter: Float): DashLayout {
+    val narrowest = (width - gutter * 2) * THIRD_WEIGHT / (BIG_WEIGHT + MEDIA_WEIGHT + THIRD_WEIGHT)
+    return when {
+        height > width * 1.2f && height >= 700f -> DashLayout.PORTRAIT
+        width < 560f -> DashLayout.NARROW
+        width > height * 2.1f && narrowest >= MIN_SIDE_CARD_WIDTH && narrowest >= height * MIN_SIDE_CARD_RATIO -> DashLayout.THREE_COLUMNS
+        else -> DashLayout.BIG_AND_STACKED
+    }
+}
+
+/** Weights of the three side-by-side cards. */
+internal const val BIG_WEIGHT = 1.6f
+internal const val MEDIA_WEIGHT = 1f
+internal const val THIRD_WEIGHT = 0.9f
+private const val MIN_SIDE_CARD_WIDTH = 280f
+/** Narrowest card width over its height: below this, the cards are tall slivers. */
+private const val MIN_SIDE_CARD_RATIO = 0.6f

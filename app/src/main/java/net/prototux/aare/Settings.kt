@@ -264,6 +264,57 @@ class Settings(context: Context) {
         get() = prefs.getInt("video_zoom_pct", 0)
         set(v) = prefs.edit { putInt("video_zoom_pct", v) }
 
+    /**
+     * What the now-playing screen shows besides the art: [VISUAL_OFF] or [VISUAL_SPECTRUM] (the
+     * spectrum of the sound going to the car). Read only through here, so more visuals can join.
+     */
+    var nowPlayingVisual: String
+        get() = prefs.getString("now_playing_visual", VISUAL_OFF) ?: VISUAL_OFF
+        set(v) = prefs.edit { putString("now_playing_visual", v) }
+
+    /** A corner button opens the visualizer on the whole car screen; while moving, only with [ignoreDriving] (passenger mode). */
+    var visualizerFullScreen: Boolean
+        get() = prefs.getBoolean("visualizer_full_screen", false)
+        set(v) = prefs.edit { putBoolean("visualizer_full_screen", v) }
+
+    /**
+     * The visualizer's colors: [VISUAL_COLORS_SPECTRAL] (green, yellow, orange, red by height) or
+     * [VISUAL_COLORS_SYSTEM] (the car theme's accent).
+     */
+    var visualizerColors: String
+        get() = prefs.getString("visualizer_colors", VISUAL_COLORS_SPECTRAL) ?: VISUAL_COLORS_SPECTRAL
+        set(v) = prefs.edit { putString("visualizer_colors", v) }
+
+    /** [VISUAL_BARS_SEGMENTED] (LED-style blocks) or [VISUAL_BARS_SOLID]. */
+    var visualizerBars: String
+        get() = prefs.getString("visualizer_bars", VISUAL_BARS_SEGMENTED) ?: VISUAL_BARS_SEGMENTED
+        set(v) = prefs.edit { putString("visualizer_bars", v) }
+
+    /** How opaque the bars are, in percent ([VISUAL_OPACITY_MIN]..100). */
+    var visualizerOpacityPct: Int
+        get() = prefs.getInt("visualizer_opacity_pct", 100).coerceIn(VISUAL_OPACITY_MIN, 100)
+        set(v) = prefs.edit { putInt("visualizer_opacity_pct", v.coerceIn(VISUAL_OPACITY_MIN, 100)) }
+
+    /** A peak mark over each bar that holds a moment, then falls. */
+    var visualizerPeaks: Boolean
+        get() = prefs.getBoolean("visualizer_peaks", true)
+        set(v) = prefs.edit { putBoolean("visualizer_peaks", v) }
+
+    /** How fast the bars fall: [VISUAL_FALL_SLOW], [VISUAL_FALL_NORMAL] or [VISUAL_FALL_FAST]. */
+    var visualizerFall: String
+        get() = prefs.getString("visualizer_fall", VISUAL_FALL_NORMAL) ?: VISUAL_FALL_NORMAL
+        set(v) = prefs.edit { putString("visualizer_fall", v) }
+
+    /** The album art, faded, behind now playing (as without a visualizer) and behind the full-screen visualizer. */
+    var visualizerArtBackground: Boolean
+        get() = prefs.getBoolean("visualizer_art_background", true)
+        set(v) = prefs.edit { putBoolean("visualizer_art_background", v) }
+
+    /** How late the visualizer shows the sound, in ms, to match what the car plays (it can't be shown early). */
+    var visualizerDelayMs: Int
+        get() = prefs.getInt("visualizer_delay_ms", 0).coerceIn(0, VISUAL_DELAY_MAX_MS)
+        set(v) = prefs.edit { putInt("visualizer_delay_ms", v.coerceIn(0, VISUAL_DELAY_MAX_MS)) }
+
     /** The Jellyfin server for the Videos app (an http(s) address), and the signed-in account (see JellyfinAccount). */
     /** Jellyfin videos above this bitrate (kbps) are re-encoded by the server to fit; 0 plays every file as it is. */
     var jellyfinMaxKbps: Int
@@ -435,6 +486,18 @@ class Settings(context: Context) {
         const val WALLPAPER_CUSTOM = "custom"
         /** The user's wallpaper photo, in the app's files. */
         const val WALLPAPER_FILE = "wallpaper.jpg"
+        const val VISUAL_OFF = "off"
+        const val VISUAL_SPECTRUM = "spectrum"
+        const val VISUAL_COLORS_SPECTRAL = "spectral"
+        const val VISUAL_COLORS_SYSTEM = "system"
+        const val VISUAL_BARS_SEGMENTED = "segmented"
+        const val VISUAL_BARS_SOLID = "solid"
+        const val VISUAL_OPACITY_MIN = 30
+        const val VISUAL_FALL_SLOW = "slow"
+        const val VISUAL_FALL_NORMAL = "normal"
+        const val VISUAL_FALL_FAST = "fast"
+        const val VISUAL_DELAY_MAX_MS = 500
+        const val VISUAL_DELAY_STEP_MS = 10
     }
 
     fun registerListener(l: SharedPreferences.OnSharedPreferenceChangeListener) = prefs.registerOnSharedPreferenceChangeListener(l)

@@ -152,8 +152,32 @@ internal fun ContentArea(
     val focusEntry = remember { FocusRequester() }
     var contentFocused by remember { mutableStateOf(false) }
     val inputMode = LocalInputModeManager.current.inputMode
-    LaunchedEffect(state.screen) { runCatching { focusEntry.requestFocus() } }
+    // The old screen fades out for a moment and can catch this first request; when it goes, its
+    // focus goes with it and the next knob turn would start from the rail. So ask again until
+    // the new screen holds it (a media screen also shows its buttons only once its app answers).
+    LaunchedEffect(state.screen) {
+        runCatching { focusEntry.requestFocus() }
+        repeat(SCREEN_FOCUS_TRIES) {
+            delay(SCREEN_FOCUS_RETRY_MS)
+            if (!contentFocused) {
+                val ok = runCatching { focusEntry.requestFocus() }.getOrDefault(false)
+                android.util.Log.d("AareFocus", "screen ${state.screen}: focus not in the content, asked again (ok=$ok)")
+            }
+        }
+    }
     LaunchedEffect(inputMode) { if (!contentFocused) runCatching { focusEntry.requestFocus() } }
+    // A screen whose app answers late (a media app's buttons, a hosted app's list) replaces the
+    // item that held focus, and focus falls off the screen: the next knob turn would start from
+    // the rail. On a knob car, when focus leaves the content for nowhere (not a tilt to the rail
+    // or a banner: some pane holds it then), put it back. Any time, not only right after opening.
+    LaunchedEffect(contentFocused, state.screen) {
+        if (contentFocused || !CarFocusVisibility.rotary) return@LaunchedEffect
+        delay(FOCUS_LOST_GRACE_MS)
+        if (RotaryAreas.focused() == null) {
+            val ok = runCatching { focusEntry.requestFocus() }.getOrDefault(false)
+            android.util.Log.d("AareFocus", "screen ${state.screen}: focus fell off the screen, back into the content (ok=$ok)")
+        }
+    }
     AnimatedContent(
         targetState = state.screen,
         transitionSpec = { fadeIn(tween(160)) togetherWith fadeOut(tween(120)) },
@@ -178,6 +202,12 @@ internal fun ContentArea(
         }
     }
 }
+
+/** After a screen change, how often and how long the content keeps asking for the focus. */
+private const val SCREEN_FOCUS_RETRY_MS = 250L
+private const val SCREEN_FOCUS_TRIES = 6
+/** How long focus may be nowhere (between a removed item and its replacement) before it's put back. */
+private const val FOCUS_LOST_GRACE_MS = 150L
 
 // ---------------------------------------------------------------- rail
 
@@ -387,8 +417,8 @@ internal fun Dashboard(
     // The user's cards in order (Settings > Dashboard), as many as the screen has room for: the
     // first gets the big space.
     BoxWithConstraints(modifier) {
-        val narrow = maxWidth < 560.dp
-        if (maxHeight > maxWidth * 1.2f && maxHeight >= 700.dp) {
+        val layout = dashboardLayout(maxWidth.value, maxHeight.value, gutter.value)
+        if (layout == DashLayout.PORTRAIT) {
             // portrait screens (720x1280, 1080x1920…): the cards stacked, the first two sharing the height
             val cards = dashboardSlots(state.dashboardCards, 3, shown)
             Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(gutter)) {
@@ -400,7 +430,7 @@ internal fun Dashboard(
                     }, false)
                 }
             }
-        } else if (narrow) {
+        } else if (layout == DashLayout.NARROW) {
             // small screens: one big card, the second as a strip under it
             val cards = dashboardSlots(state.dashboardCards, 2, shown)
             Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(gutter)) {
@@ -408,12 +438,12 @@ internal fun Dashboard(
                     slot(card, if (i == 0) Modifier.weight(1f).fillMaxWidth() else Modifier.fillMaxWidth().height(112.dp), i > 0)
                 }
             }
-        } else if (maxWidth > maxHeight * 2.1f) {
-            // very wide screens (1920x720, 2560x720…): three cards side by side, like Android Auto's
+        } else if (layout == DashLayout.THREE_COLUMNS) {
+            // very wide screens (1920x720, 2560x720…) with room for it: three cards side by side, like Android Auto's
             val cards = dashboardSlots(state.dashboardCards, 3, shown)
             Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(gutter)) {
                 cards.forEachIndexed { i, card ->
-                    slot(card, Modifier.weight(when (i) { 0 -> 1.6f; 1 -> 1f; else -> 0.9f }).fillMaxHeight(), false)
+                    slot(card, Modifier.weight(when (i) { 0 -> BIG_WEIGHT; 1 -> MEDIA_WEIGHT; else -> THIRD_WEIGHT }).fillMaxHeight(), false)
                 }
             }
         } else {

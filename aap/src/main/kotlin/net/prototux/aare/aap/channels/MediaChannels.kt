@@ -216,6 +216,9 @@ class VideoChannel(
 
         /** The head unit changed the UI layout (insets, margins, theme) of the running stream. */
         fun onUiConfig(config: UiConfig) {}
+
+        /** Every focus message from the head unit, before it's acted on: [asked] when it was a request, not an answer. For the log. */
+        fun onVideoFocusMessage(mode: VideoFocusMode, asked: Boolean) {}
     }
 
     val configs: List<VideoConfiguration> = service.mediaSinkService.videoConfigsList
@@ -274,11 +277,13 @@ class VideoChannel(
         when (msg.id) {
             MediaMsg.VIDEO_FOCUS_NOTIFICATION -> {
                 val n = VideoFocusNotification.parseFrom(msg.bodyBytes())
+                listener.onVideoFocusMessage(n.focus, asked = false)
                 setFocus(n.focus)
             }
             MediaMsg.VIDEO_FOCUS_REQUEST -> {
                 // Some head units ask us to change focus; we comply and confirm.
                 val r = VideoFocusRequestNotification.parseFrom(msg.bodyBytes())
+                listener.onVideoFocusMessage(r.mode, asked = true)
                 val projected = isProjected(r.mode)
                 // Confirm the projected mode it asked for (with or without input focus).
                 send(MediaMsg.VIDEO_FOCUS_NOTIFICATION, VideoFocusNotification.newBuilder()

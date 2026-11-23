@@ -49,4 +49,25 @@ class DashboardCardsTest {
         assertEquals(listOf(MAP, MEDIA, CALENDAR), listOf(MAP, MEDIA, CALENDAR).moved(0, -1))
         assertEquals(listOf(MEDIA, CALENDAR, MAP), listOf(MAP, MEDIA, CALENDAR).moved(0, 5))
     }
+
+    @Test
+    fun wideScreensWithRoomGetThreeColumns() {
+        // 1920x720 and 2560x720 at 160 dpi, less the side rail (~90 dp)
+        assertEquals(DashLayout.THREE_COLUMNS, dashboardLayout(1830f, 700f, 12f))
+        assertEquals(DashLayout.THREE_COLUMNS, dashboardLayout(2470f, 700f, 12f))
+    }
+
+    @Test
+    fun wideButCrampedScreensStackTheSideCards() {
+        // Wide enough in ratio, but the third card would be a sliver: big card, then 2 over 3.
+        assertEquals(DashLayout.BIG_AND_STACKED, dashboardLayout(1000f, 460f, 12f))
+        assertEquals(DashLayout.BIG_AND_STACKED, dashboardLayout(1200f, 560f, 12f))
+    }
+
+    @Test
+    fun ordinaryScreensKeepTheirLayouts() {
+        assertEquals(DashLayout.BIG_AND_STACKED, dashboardLayout(1100f, 620f, 12f)) // 1280x720 class
+        assertEquals(DashLayout.NARROW, dashboardLayout(500f, 400f, 12f))
+        assertEquals(DashLayout.PORTRAIT, dashboardLayout(720f, 1200f, 12f))
+    }
 }

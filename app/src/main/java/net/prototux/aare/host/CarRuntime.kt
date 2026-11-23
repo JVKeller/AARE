@@ -17,6 +17,9 @@ import androidx.car.app.CarContext
 import androidx.car.app.constraints.ConstraintManager
 import androidx.car.app.navigation.model.Trip
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -25,6 +28,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.toBitmap
 import kotlinx.coroutines.CoroutineScope
@@ -703,6 +707,44 @@ class CarRuntime(
         fun onRotary(delta: Int): Boolean
     }
 
+    /**
+     * A media view on the whole screen (the full-screen visualizer), over the rail too. Back and a
+     * knob press leave it; the knob's turns and tilts stop here, so they can't move the hidden focus.
+     * Leaving the screen it was opened from closes it.
+     */
+    @Composable
+    private fun MediaFullScreen(modifier: Modifier) {
+        val openedOn = remember { ui.screen }
+        // The car's Back reaches Compose's handlers before screenBack, and the media screen under
+        // this one has its own (now playing -> browse): this one, composed later, comes first.
+        androidx.activity.compose.BackHandler { media.exitFullScreen() }
+        LaunchedEffect(ui.screen) { if (ui.screen != openedOn) media.exitFullScreen() }
+        DisposableEffect(Unit) {
+            val prevBack = screenBack
+            val prevInput = screenInput
+            val back: () -> Boolean = { media.exitFullScreen(); true }
+            val input = object : CarScreenInput {
+                override fun onKey(code: Int, down: Boolean, longPress: Boolean): Boolean = when (code) {
+                    android.view.KeyEvent.KEYCODE_DPAD_CENTER, android.view.KeyEvent.KEYCODE_ENTER, android.view.KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+                        if (!down) media.exitFullScreen()
+                        true
+                    }
+                    android.view.KeyEvent.KEYCODE_DPAD_LEFT, android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
+                    android.view.KeyEvent.KEYCODE_DPAD_UP, android.view.KeyEvent.KEYCODE_DPAD_DOWN -> true
+                    else -> false // media keys still work
+                }
+                override fun onRotary(delta: Int): Boolean = true
+            }
+            screenBack = back
+            screenInput = input
+            onDispose {
+                if (screenBack === back) screenBack = prevBack
+                if (screenInput === input) screenInput = prevInput
+            }
+        }
+        media.FullScreen(ui.drivingRestricted, modifier.fillMaxSize())
+    }
+
     /** Back key from the car. */
     fun back() {
         if (ui.assistantAppId != null) { ui.assistantAppId = null; return }
@@ -749,6 +791,7 @@ class CarRuntime(
                     },
                     navMap = { app, mod -> shownConnection(app.id)?.let { CarAppScreen(it, this, mod, compact = true, onOpen = { actions.openApp(app) }) } },
                     overlay = { mod ->
+                        if (media.fullScreen) MediaFullScreen(mod)
                         val entry = ui.app(ui.assistantAppId)
                         val conn = entry?.let { shownConnection(it.id) }
                         if (entry != null && conn != null) {
