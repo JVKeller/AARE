@@ -161,7 +161,10 @@ class CarSession(
     /** The video codec matched to this head unit (phone-hardware ∩ car-advertised), chosen at discovery. */
     @Volatile private var videoCodec: VideoCodecKind = VideoCodecKind.H264
     private val audioOuts = java.util.concurrent.ConcurrentHashMap<AudioStreamType, CarAudioOut>()
-    private val micRouter = MicRouter({ mic }, { active -> if (aap.state == AapSession.State.RUNNING) aap.voiceSession(active) })
+    private val micRouter = MicRouter({ mic }, { active ->
+        if (aap.state == AapSession.State.RUNNING) aap.voiceSession(active)
+        main.post { carMicOpen = active }
+    })
     @Volatile private var mediaFocus = false
     /** The car lets navigation voice play (but not music). */
     @Volatile private var guidanceFocusState = false
@@ -180,6 +183,7 @@ class CarSession(
         // The head unit is waiting for our version answer: start the protocol before the UI work.
         aap.start()
         runtime.microphone = { sink, stopped -> micRouter.open(sink, stopped) }
+        audioManager?.registerAudioRecordingCallback(recordingCallback, main)
         runtime.projection = projection
         runtime.exitToCar = ::exitToCar
         runtime.onTrip = { _, trip ->
@@ -377,7 +381,9 @@ class CarSession(
             state == AudioFocusStateType.AUDIO_FOCUS_STATE_GAIN || state == AudioFocusStateType.AUDIO_FOCUS_STATE_GAIN_MEDIA_ONLY -> main.post {
                 if (pausedByCar) {
                     pausedByCar = false
-                    if (notification.unsolicited && media.playback.value?.playing != true) media.playPause()
+                    // Still voice typing on the phone: the mic closing resumes instead.
+                    if (phoneMicOpen) pausedByMic = true
+                    else if (notification.unsolicited && media.playback.value?.playing != true) media.playPause()
                 }
             }
         }
@@ -385,6 +391,42 @@ class CarSession(
 
     /** Media paused by an unsolicited transient focus loss, to resume on the next gain (written on main). */
     @Volatile private var pausedByCar = false
+
+    private val audioManager = context.getSystemService(android.media.AudioManager::class.java)
+    /** An app on the phone records speech (voice typing, a voice prompt), main thread. */
+    private var phoneMicOpen = false
+    /** Media paused because of [phoneMicOpen], to play again when it closes (main). */
+    private var pausedByMic = false
+    /** A car app has the mic (the car takes the audio focus for that itself), main. */
+    private var carMicOpen = false
+
+    /**
+     * Voice typing on the phone pauses the music. Samsung keeps the music app's focus apart from
+     * the phone's own, so the keyboard's focus request never reaches it, and some apps (Claude)
+     * record without asking for focus at all. Calls are left to focus; so is our own mic for car apps.
+     */
+    private val recordingCallback = object : android.media.AudioManager.AudioRecordingCallback() {
+        override fun onRecordingConfigChanged(configs: MutableList<android.media.AudioRecordingConfiguration>) {
+            if (closed) return
+            val open = !carMicOpen && configs.any { !it.isClientSilenced && it.clientAudioSource in SPEECH_SOURCES }
+            if (open == phoneMicOpen) return
+            phoneMicOpen = open
+            if (open) {
+                if (media.playback.value?.playing == true) {
+                    pausedByMic = true
+                    DiagLog.add("car audio: the phone's mic is recording, pausing the music")
+                    media.pause()
+                }
+            } else if (pausedByMic) {
+                pausedByMic = false
+                // Paused by the car as well: its gain resumes.
+                if (!pausedByCar && media.playback.value?.playing != true) {
+                    DiagLog.add("car audio: the phone's mic closed, playing again")
+                    media.playPause()
+                }
+            }
+        }
+    }
 
     override fun onClosed(session: AapSession, reason: String, error: Throwable?) {
         val rejected = session.certificateRefusal
@@ -897,7 +939,7 @@ class CarSession(
         updatePhoneMute()
     }
 
-    private val phoneMute = PhoneMute(context)
+    private val phoneMute = PhoneMute(context) { playing -> if (!closed) uncapturableChanged(playing) }
 
     /**
      * Screen-capture audio leaves the phone playing too: keep its media volume at 0 while the car
@@ -910,7 +952,42 @@ class CarSession(
         // AARE's player has the channel: the capture is off, so another app's first moments (until
         // the player gets its focus loss, ~2 s with Android's fade) would play on the phone.
         val player = !closed && media != null && !audioMethods.containsKey(AudioStreamType.AUDIO_STREAM_MEDIA)
-        phoneMute.set((copying || player) && settings.mutePhoneWhileCapturing)
+        phoneMute.set(listen = copying || player, on = settings.mutePhoneWhileCapturing)
+    }
+
+    /** Media paused while an app the car can't hear plays on the phone (the Claude app reading a reply), main. */
+    private var pausedForPhoneAudio = false
+    private var pausedForPhoneAudioAt = 0L
+    /** The music app itself refuses capture: pausing it for itself would loop. Left alone this drive. */
+    private var uncapturableMediaApp: String? = null
+
+    /**
+     * An app the car can't hear plays on the phone: pause the music (Samsung doesn't pass that
+     * app's focus to the music app, see [recordingCallback]), and play again when it's done.
+     */
+    private fun uncapturableChanged(playing: Boolean) {
+        val now = media.playback.value
+        if (playing) {
+            if (now?.playing == true && now.packageName != uncapturableMediaApp) {
+                pausedForPhoneAudio = true
+                pausedForPhoneAudioAt = SystemClock.elapsedRealtime()
+                DiagLog.add("car audio: an app the car can't hear plays on the phone, pausing the music")
+                media.pause()
+            }
+        } else if (pausedForPhoneAudio) {
+            pausedForPhoneAudio = false
+            // It stopped as soon as the music did (after the 1.5 s wait for a reader's next sentence): it was the music.
+            if (SystemClock.elapsedRealtime() - pausedForPhoneAudioAt < SELF_PAUSE_MS) {
+                uncapturableMediaApp = now?.packageName
+                DiagLog.add("car audio: ${now?.packageName} can't be captured itself, not pausing it again")
+                if (now?.playing != true) media.playPause()
+                return
+            }
+            if (!pausedByCar && !pausedByMic && now?.playing != true) {
+                DiagLog.add("car audio: the phone app is done, playing again")
+                media.playPause()
+            }
+        }
     }
 
     /** The car's media channel, once set up (main thread). */
@@ -1149,7 +1226,7 @@ class CarSession(
         net.prototux.aare.notify.CarNotificationListener.removed = null
         audioOuts.values.forEach { it.stop() }; audioOuts.clear()
         readyAudio.clear(); audioMethods.clear()
-        phoneMute.set(false)
+        phoneMute.set(listen = false, on = false)
         if (CarPlayerAudio.listener === playerAudioListener) { CarPlayerAudio.listener = null; CarPlayerAudio.mediaFormat = null }
         mediaChannel = null
         phoneBridge?.stop(); phoneBridge = null
@@ -1158,6 +1235,7 @@ class CarSession(
         drivingMode.stop()
         cluster?.stop()
         micRouter.shutdown()
+        audioManager?.unregisterAudioRecordingCallback(recordingCallback)
         teardownVideo()
         runtime.stop()
         CarData.reset(owner = this)
@@ -1321,3 +1399,13 @@ class CarSession(
 }
 
 private fun androidx.compose.ui.graphics.ImageBitmap.asAndroidBitmapCompat(): Bitmap = asAndroidBitmap()
+
+/** Recording sources that mean someone is speaking to an app (not calls, hotword or capture). */
+private val SPEECH_SOURCES = setOf(
+    android.media.MediaRecorder.AudioSource.DEFAULT,
+    android.media.MediaRecorder.AudioSource.MIC,
+    android.media.MediaRecorder.AudioSource.VOICE_RECOGNITION,
+)
+
+/** The uncapturable sound ending this soon after our pause (1.5 s of it the reader's sentence gap): it was the music itself. */
+private const val SELF_PAUSE_MS = 2_500L

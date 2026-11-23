@@ -20,49 +20,67 @@ import net.prototux.aare.DiagLog
  *
  * Apps can refuse to be captured (the Claude app's read-aloud does): the car gets silence from
  * them, so while one plays the phone's volume is put back and they're heard from the phone rather
- * than not at all. Muted again shortly after it stops.
+ * than not at all. Muted again shortly after it stops. [onUncapturable] hears about those either
+ * way (muting on or off), so the music can make room for them.
  */
-class PhoneMute(context: Context) {
+class PhoneMute(context: Context, private val onUncapturable: (Boolean) -> Unit = {}) {
     private val am = context.getSystemService(AudioManager::class.java)
     private val prefs = state(context)
 
     private val main = Handler(Looper.getMainLooper())
+    private var listening = false
+    /** Muting is on. */
     private var wanted = false
+    /** An app that can't be captured plays (or did a moment ago). */
     private var heldOpen = false
 
     private val playback = object : AudioManager.AudioPlaybackCallback() {
         override fun onPlaybackConfigChanged(configs: List<AudioPlaybackConfiguration>) = update(configs)
     }
-    private val muteAgain = Runnable { if (wanted && heldOpen) { heldOpen = false; mute() } }
+    private val muteAgain = Runnable {
+        if (!heldOpen) return@Runnable
+        heldOpen = false
+        onUncapturable(false)
+        if (wanted) mute()
+    }
 
-    /** Mutes ([on]) or restores the phone's media volume. Idempotent. Main thread. */
-    fun set(on: Boolean) {
-        if (on == wanted) { if (!on) restore(am, prefs, RESTORED); return }
-        wanted = on
-        if (on) {
-            runCatching { am.registerAudioPlaybackCallback(playback, main) }
-            update(runCatching { am.activePlaybackConfigurations }.getOrDefault(emptyList()))
-        } else {
-            runCatching { am.unregisterAudioPlaybackCallback(playback) }
-            main.removeCallbacks(muteAgain)
-            heldOpen = false
-            restore(am, prefs, RESTORED)
+    /**
+     * Watches what plays on the phone while [listen] (the car gets a copy of its sound), and mutes
+     * ([on], only while listening) or restores the phone's media volume. Idempotent. Main thread.
+     */
+    fun set(listen: Boolean, on: Boolean) {
+        val mute = listen && on
+        if (listen != listening) {
+            listening = listen
+            if (listen) {
+                runCatching { am.registerAudioPlaybackCallback(playback, main) }
+            } else {
+                runCatching { am.unregisterAudioPlaybackCallback(playback) }
+                main.removeCallbacks(muteAgain)
+                if (heldOpen) { heldOpen = false; onUncapturable(false) }
+            }
         }
+        val changed = mute != wanted
+        wanted = mute
+        if (!mute) restore(am, prefs, RESTORED)
+        else if (changed) update(runCatching { am.activePlaybackConfigurations }.getOrDefault(emptyList()))
+        if (listen && !changed) update(runCatching { am.activePlaybackConfigurations }.getOrDefault(emptyList()))
     }
 
     private fun update(configs: List<AudioPlaybackConfiguration>) {
-        if (!wanted) return
+        if (!listening) return
         if (configs.any { blocksCapture(it.audioAttributes) }) {
             main.removeCallbacks(muteAgain)
             if (!heldOpen) {
                 heldOpen = true
-                if (restore(am, prefs, null)) DiagLog.add("car audio: an app that can't be captured is playing, phone volume back on")
+                if (wanted && restore(am, prefs, null)) DiagLog.add("car audio: an app that can't be captured is playing, phone volume back on")
+                onUncapturable(true)
             }
         } else if (heldOpen) {
             // Not at once: a voice reading aloud can drop its player between sentences.
             main.removeCallbacks(muteAgain)
             main.postDelayed(muteAgain, MUTE_AGAIN_MS)
-        } else {
+        } else if (wanted) {
             mute()
         }
     }
