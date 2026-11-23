@@ -373,7 +373,12 @@ class CarSession(
             // The car took the audio (radio, a call...): pause the phone's media like Android Auto
             // does, and play again when a transient loss ends.
             notification.unsolicited && (state == AudioFocusStateType.AUDIO_FOCUS_STATE_LOSS || state == AudioFocusStateType.AUDIO_FOCUS_STATE_LOSS_TRANSIENT) -> main.post {
-                pausedByCar = state == AudioFocusStateType.AUDIO_FOCUS_STATE_LOSS_TRANSIENT && media.playback.value?.playing == true
+                // Voice typing paused the music a moment before (the car takes the audio when the
+                // phone's mic opens over Bluetooth): it was playing all the same. Keep the request,
+                // or the car never hands the audio back and the music plays into silence.
+                pausedByCar = state == AudioFocusStateType.AUDIO_FOCUS_STATE_LOSS_TRANSIENT &&
+                    (media.playback.value?.playing == true || pausedByMic)
+                if (pausedByCar && pausedByMic) DiagLog.add("audio focus: the car took the audio while voice typing paused the music, waiting for it back")
                 media.pause()
             }
             // Only the car handing focus back resumes: a gain answering our own request means
