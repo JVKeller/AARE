@@ -43,6 +43,7 @@ import net.prototux.aare.Settings
 import net.prototux.aare.aap.CertificateRefusal
 import net.prototux.aare.aap.PinRefusal
 import net.prototux.aare.aap.Transport
+import net.prototux.aare.aap.wireless.WirelessBootstrapException
 import net.prototux.aare.car.CarSession
 import net.prototux.aare.car.DrivingMode
 import net.prototux.aare.cert.CertificateDownload
@@ -53,8 +54,6 @@ import net.prototux.aare.transport.LocalSocketTransport
 import net.prototux.aare.transport.TcpServer
 import net.prototux.aare.transport.UsbAccessoryTransport
 import net.prototux.aare.transport.UsbReattach
-import net.prototux.aare.aap.wireless.WirelessRetryPolicy
-import net.prototux.aare.transport.wireless.WirelessAutoStarter
 import net.prototux.aare.transport.wireless.WirelessConnector
 import net.prototux.aare.ui.MainActivity
 
@@ -103,9 +102,6 @@ class ProjectionService : Service() {
     private var sessionStart = 0L
     private var wakeLock: PowerManager.WakeLock? = null
     private var wirelessJob: Job? = null
-    private var wirelessTarget: String? = null
-    @Volatile private var wirelessStage = WirelessRetryPolicy.Stage.IDLE
-    private val wirelessPolicy = WirelessRetryPolicy()
     /** onDestroy ran: a session closing late must not touch this instance any more. */
     private var destroyed = false
     /** The download prompt is shown at most once per service lifetime, until a Google cert arrives. */
@@ -208,169 +204,55 @@ class ProjectionService : Service() {
     /**
      * Wireless: Bluetooth bootstrap, join the car's Wi-Fi, TCP to its AAP server. Runs in the
      * foreground service because Android only lets foreground apps request Wi-Fi networks.
-     *
-     * Retries with backoff while the head unit's Bluetooth ACL stays connected (covering both
-     * Bluetooth/SDP contention and cars that aren't ready yet, #74), aborts RFCOMM/WPP on
-     * ACL_DISCONNECTED, and restarts from attempt 1 if the head unit re-announces itself.
      */
     private fun connectWireless(address: String) {
-        if (session != null) {
-            log("wireless: session already active; ignoring wireless trigger for $address")
-            return
-        }
-        if (wirelessJob?.isActive == true) {
-            val act = wirelessPolicy.onBtEvent(WirelessRetryPolicy.BtEvent.ACL_CONNECTED, address, wirelessTarget, wirelessStage)
-            if (act == WirelessRetryPolicy.EventAction.ABORT_AND_RESTART) {
-                log("wireless: fresh Bluetooth trigger for $address while in $wirelessStage; restarting wireless attempt")
-                wirelessJob?.cancel()
-            } else {
-                log("wireless: already connecting to $wirelessTarget ($wirelessStage); ignoring trigger for $address")
-                return
-            }
-        }
+        if (session != null || wirelessJob?.isActive == true) return
         val adapter = getSystemService(android.bluetooth.BluetoothManager::class.java)?.adapter ?: return
         val device = runCatching { adapter.getRemoteDevice(address) }.getOrNull() ?: return
-        val label = WirelessAutoStarter.deviceLabel(device)
-        val missing = WirelessConnector(this, DiagAapLog).missingPermissions()
+        // Pass the phone's stable id as the WPP device serial and phone_info.instance_id: strict head
+        // units (#46) want the serial in the version response before they send the WifiStartRequest,
+        // and Google's receiver library ignores every phone message except pings and
+        // version responses until phone_info carries an instance id.
+        val connector = WirelessConnector(this, DiagAapLog,
+            WirelessConnector.Options(bootstrap = net.prototux.aare.aap.wireless.WirelessBootstrap.Options(
+                deviceSerial = settings.instanceId, instanceId = settings.instanceId, deviceName = runCatching { adapter.name }.getOrNull())))
+        val missing = connector.missingPermissions()
         if (missing.isNotEmpty()) {
-            log("wireless: giving up on $label: missing permissions ${missing.joinToString { it.substringAfterLast('.') }}")
-            scheduleIdleStop()
+            log("wireless: missing permissions ${missing.joinToString { it.substringAfterLast('.') }}")
             return
         }
-        wirelessTarget = address
         lastWirelessAddress = address
-        wirelessStage = WirelessRetryPolicy.Stage.RFCOMM
+        log("wireless: connecting to ${runCatching { device.name }.getOrNull() ?: address}")
         _state.update { it.copy(status = getString(R.string.notif_status_connecting_wirelessly)) }
         wirelessJob = scope.launch {
-            val myJob = coroutineContext[Job]
-            var aclDisconnected = false
-            var abortReason: String? = null
-            val aclReceiver = object : BroadcastReceiver() {
-                override fun onReceive(c: Context, i: Intent) {
-                    val d = IntentCompat.getParcelableExtra(i, android.bluetooth.BluetoothDevice.EXTRA_DEVICE, android.bluetooth.BluetoothDevice::class.java) ?: return
-                    if (!d.address.equals(address, ignoreCase = true)) return
-                    aclDisconnected = true
-                    val stage = wirelessStage
-                    val act = wirelessPolicy.onBtEvent(WirelessRetryPolicy.BtEvent.ACL_DISCONNECTED, d.address, address, stage)
-                    log("wireless: ACL_DISCONNECTED ${WirelessAutoStarter.deviceLabel(d)} stage=$stage -> $act")
-                    if (act == WirelessRetryPolicy.EventAction.ABORT_AND_STOP) {
-                        abortReason = "Bluetooth ACL disconnected during $stage"
-                        myJob?.cancel()
-                    }
-                }
-            }
-            ContextCompat.registerReceiver(
-                this@ProjectionService,
-                aclReceiver,
-                IntentFilter(android.bluetooth.BluetoothDevice.ACTION_ACL_DISCONNECTED),
-                ContextCompat.RECEIVER_EXPORTED,
-            )
-            // Pass the phone's stable id as the WPP device serial: strict head units (#46) want it in
-            // the version response before they send the WifiStartRequest. Single RFCOMM try per outer
-            // attempt so the backoff loop here governs all retries and checks ACL state between them.
-            val connector = WirelessConnector(
-                this@ProjectionService,
-                DiagAapLog,
-                WirelessConnector.Options(
-                    rfcommAttempts = 1,
-                    // instance_id too: Google's receiver library ignores every phone message but
-                    // pings and version responses until phone_info carries one.
-                    bootstrap = net.prototux.aare.aap.wireless.WirelessBootstrap.Options(
-                        deviceSerial = settings.instanceId, instanceId = settings.instanceId,
-                        deviceName = runCatching { getSystemService(android.bluetooth.BluetoothManager::class.java)?.adapter?.name }.getOrNull()),
-                    onStage = { wirelessStage = it },
-                ),
-            )
-            var lastError: String? = null
-            try {
-                for (attempt in 1..wirelessPolicy.maxAttempts) {
-                    val aclUp = !aclDisconnected && (attempt == 1 || WirelessConnector.isConnected(device))
-                    val stopBefore = wirelessPolicy.beforeAttempt(
-                        wirelessEnabled = settings.wireless,
-                        sessionActive = session != null,
-                        missingPermissions = connector.missingPermissions().isNotEmpty(),
-                        aclConnected = aclUp,
-                    )
-                    if (stopBefore != null) {
-                        log("wireless: giving up on $label before attempt $attempt/${wirelessPolicy.maxAttempts}: ${stopBefore.reason}")
-                        _state.update { it.copy(status = getString(R.string.notif_status_not_connected), lastError = lastError ?: stopBefore.reason) }
-                        break
-                    }
-                    // With the phone's Wi-Fi off the join fails at once, and the retries that follow leave
-                    // the dongle stuck mid-handshake (seen with an AAWireless 2): wait for Wi-Fi instead,
-                    // and connect as soon as the user turns it on.
-                    if (!wifiEnabled()) {
-                        log("wireless: Wi-Fi is off on the phone; waiting for it to be turned on to connect to $label")
-                        _state.update { it.copy(status = getString(R.string.notif_status_wifi_off), lastError = "Wi-Fi is off on the phone") }
-                        var waitedMs = 0L
-                        while (!wifiEnabled() && waitedMs < WIFI_WAIT_MS && settings.wireless && session == null &&
-                            !aclDisconnected && WirelessConnector.isConnected(device)) {
-                            delay(1_000); waitedMs += 1_000
-                        }
-                        if (!wifiEnabled()) {
-                            log("wireless: Wi-Fi stayed off; not connecting to $label")
-                            _state.update { it.copy(status = getString(R.string.notif_status_not_connected)) }
-                            break
-                        }
-                        log("wireless: Wi-Fi is on after ${waitedMs / 1000} s; connecting")
-                        delay(WIFI_SETTLE_MS) // let Wi-Fi finish starting before asking for a network
-                    }
-                    log("wireless: attempt $attempt/${wirelessPolicy.maxAttempts} connecting to $label")
-                    val startMs = SystemClock.elapsedRealtime()
-                    try {
-                        val transport = connector.connect(device)
-                        log("wireless: attempt $attempt/${wirelessPolicy.maxAttempts} to $label succeeded in ${SystemClock.elapsedRealtime() - startMs} ms")
-                        startSession(transport, wireless = true, peerKey = address, trustOnFirstUse = true)
+            // Right after the Bluetooth link comes up some cars accept the connection but don't
+            // start Android Auto yet (the Mach-E hangs up after a few silent seconds, #74); a
+            // little later they do. The retries run in this job, so the service stays up meanwhile.
+            var retries = 0
+            while (true) {
+                try {
+                    val transport = connector.connect(device)
+                    startSession(transport, wireless = true, peerKey = address, trustOnFirstUse = true)
+                    return@launch
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    log("wireless: ${e.message}")
+                    val carNotReady = generateSequence<Throwable>(e) { it.cause }.any { it is WirelessBootstrapException && it.whileNegotiating }
+                    if (carNotReady && retries < WIRELESS_RETRIES && session == null) {
+                        retries++
+                        val wait = WIRELESS_RETRY_DELAY_MS * retries
+                        log("wireless: the car didn't start Android Auto yet; trying again in ${wait / 1000} s ($retries/$WIRELESS_RETRIES)")
+                        delay(wait)
+                        if (session == null) continue
                         return@launch
-                    } catch (e: CancellationException) {
-                        val reason = abortReason ?: throw e
-                        log("wireless: attempt $attempt/${wirelessPolicy.maxAttempts} to $label aborted after ${SystemClock.elapsedRealtime() - startMs} ms; giving up: $reason")
-                        _state.update { it.copy(status = getString(R.string.notif_status_not_connected), lastError = lastError ?: reason) }
-                        break
-                    } catch (e: Exception) {
-                        lastError = e.message ?: e.toString()
-                        val elapsedMs = SystemClock.elapsedRealtime() - startMs
-                        val aclStillUp = !aclDisconnected && WirelessConnector.isConnected(device)
-                        when (val decision = wirelessPolicy.afterFailure(
-                            attempt = attempt,
-                            wirelessEnabled = settings.wireless,
-                            sessionActive = session != null,
-                            missingPermissions = connector.missingPermissions().isNotEmpty(),
-                            aclConnected = aclStillUp,
-                        )) {
-                            is WirelessRetryPolicy.Decision.Retry -> {
-                                log("wireless: attempt $attempt/${wirelessPolicy.maxAttempts} to $label failed after $elapsedMs ms ($lastError); retrying in ${decision.delayMs} ms")
-                                wirelessStage = WirelessRetryPolicy.Stage.BACKOFF
-                                try {
-                                    delay(decision.delayMs)
-                                } catch (ce: CancellationException) {
-                                    val reason = abortReason ?: throw ce
-                                    log("wireless: retry wait for $label aborted; giving up: $reason")
-                                    _state.update { it.copy(status = getString(R.string.notif_status_not_connected), lastError = lastError ?: reason) }
-                                    break
-                                }
-                            }
-                            is WirelessRetryPolicy.Decision.GiveUp -> {
-                                log("wireless: attempt $attempt/${wirelessPolicy.maxAttempts} to $label failed after $elapsedMs ms ($lastError); giving up: ${decision.reason}")
-                                _state.update { it.copy(status = getString(R.string.notif_status_not_connected), lastError = lastError) }
-                                break
-                            }
-                        }
                     }
-                }
-            } finally {
-                runCatching { unregisterReceiver(aclReceiver) }
-                if (wirelessJob === myJob) {
-                    wirelessStage = WirelessRetryPolicy.Stage.IDLE
-                    wirelessTarget = null
-                    if (!destroyed) scheduleIdleStop()
+                    _state.update { it.copy(status = getString(R.string.notif_status_not_connected), lastError = e.message) }
+                    return@launch
                 }
             }
         }
     }
-
-    private fun wifiEnabled(): Boolean =
-        runCatching { (applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager).isWifiEnabled }.getOrDefault(true)
 
     /**
      * The car was already connected over Bluetooth when AARE opened, so the ACL-connect broadcast
@@ -860,9 +742,6 @@ class ProjectionService : Service() {
 
     companion object {
         private const val TAG = "AareService"
-        /** How long a car on Bluetooth waits for the phone's Wi-Fi to be turned on. */
-        private const val WIFI_WAIT_MS = 120_000L
-        private const val WIFI_SETTLE_MS = 1_500L
         internal const val CHANNEL = "connection"
         private const val CHANNEL_WAITING = "waiting"
         private const val NOTIFICATION_ID = 1
@@ -870,8 +749,11 @@ class ProjectionService : Service() {
         private const val CERT_DOWNLOAD_NOTIFICATION_ID = 4
         /** A USB session that lasted this long had recovered: its drop starts a new retry budget. */
         private const val USB_RETRY_RESET_MS = 60_000L
+        /** Wireless attempts after a car that wasn't ready yet, waiting this much longer each time. */
+        private const val WIRELESS_RETRIES = 2
         /** LAN sessions kept listening after dropping before the version exchange, before giving up on it. */
         private const val LAN_VERSION_DROP_RETRIES = 2
+        private const val WIRELESS_RETRY_DELAY_MS = 10_000L
         const val ACTION_USB = "net.prototux.aare.USB"
         const val ACTION_USB_PERMISSION = "net.prototux.aare.USB_PERMISSION"
         const val ACTION_IDLE = "net.prototux.aare.IDLE"
