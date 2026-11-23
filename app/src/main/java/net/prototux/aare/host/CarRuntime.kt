@@ -57,6 +57,7 @@ import net.prototux.aare.ui.car.CarNotice
 import net.prototux.aare.ui.car.CarScreen
 import net.prototux.aare.ui.car.CarSettingsScreen
 import net.prototux.aare.ui.car.CarShell
+import net.prototux.aare.ui.car.LocalMediaCardBackdrop
 import net.prototux.aare.ui.car.CarUiState
 import net.prototux.aare.ui.car.DashCard
 import net.prototux.aare.ui.car.NotificationsScreen
@@ -767,7 +768,8 @@ class CarRuntime(
     fun Root(modifier: Modifier = Modifier) {
         val mediaApps by media.apps.collectAsState()
         CarTheme(night = ui.night, theme = ui.theme) {
-            CompositionLocalProvider(LocalCarDimens provides LocalCarDimens.current) {
+            val cardBackdrop = remember<@Composable (Modifier) -> Unit> { { mod -> media.CardVisual(mod) } }
+            CompositionLocalProvider(LocalCarDimens provides LocalCarDimens.current, LocalMediaCardBackdrop provides cardBackdrop) {
                 CarShell(
                     state = ui,
                     actions = actions,

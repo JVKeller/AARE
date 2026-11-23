@@ -11,11 +11,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.delay
 import net.prototux.aare.DiagLog
 import net.prototux.aare.Settings
 import net.prototux.aare.audio.Mix
@@ -53,7 +54,7 @@ data class VisualStyle(
     val stops: List<Pair<Float, Color>>?,
     val accent: Color,
     val dim: Color,
-    val solid: Boolean,
+    val rounded: Boolean,
     val peaks: Boolean,
     val alpha: Float,
 )
@@ -64,7 +65,7 @@ internal fun visualStyle(settings: Settings): VisualStyle {
     val stops = if (settings.visualizerColors == Settings.VISUAL_COLORS_SYSTEM) null else SPECTRAL
     return VisualStyle(
         stops, accent, accent.copy(alpha = 0.6f),
-        solid = settings.visualizerBars == Settings.VISUAL_BARS_SOLID,
+        rounded = settings.visualizerBars == Settings.VISUAL_BARS_ROUNDED,
         peaks = settings.visualizerPeaks,
         alpha = settings.visualizerOpacityPct / 100f,
     )
@@ -87,7 +88,7 @@ private val SPECTRAL = listOf(
 )
 
 /**
- * The sound as the visuals see it, refreshed about 30 times a second by [rememberSpectrumFrames].
+ * The sound as the visuals see it, refreshed with the screen (up to 60 times a second) by [rememberSpectrumFrames].
  * Levels in dBFS, from [Spectrum.FLOOR_DB] to 0, low band first. Channel 0 is mono (or left in
  * stereo), channel 1 right. Written on the main thread, read in draw.
  */
@@ -122,6 +123,10 @@ internal fun rememberSpectrumFrames(bandCount: Int, stereo: Boolean, running: Bo
     val channels = if (stereo) 2 else 1
     val frames = remember(bandCount, channels) { SpectrumFrames(bandCount, channels) }
     val delayNow by rememberUpdatedState(delayMs)
+    // In step with the screen's refresh (a timer drifts against it, and stretches when the phone is
+    // locked), at most 60 times a second: the car's video is 30 or 60 fps.
+    val view = LocalView.current
+    val frameNs = remember(view) { (1_000_000_000f / minOf(view.display?.refreshRate ?: 60f, 60f).coerceAtLeast(1f)).toLong() }
     LaunchedEffect(frames, running, fallDbPerSec) {
         val balls = Array(channels) { SpectrumBallistics(bandCount, decayDbPerSec = fallDbPerSec) }
         // Pick up where the frames are, so a pause doesn't snap the bars down.
@@ -134,7 +139,11 @@ internal fun rememberSpectrumFrames(bandCount: Int, stereo: Boolean, running: Bo
             var last = SystemClock.elapsedRealtime()
             var soundAt = 0L
             var loggedAt = 0L
+            var frameAt = 0L
             while (true) {
+                val t = withFrameNanos { it }
+                if (frameAt != 0L && t - frameAt < frameNs - FRAME_SLACK_NS) continue
+                frameAt = t
                 val now = SystemClock.elapsedRealtime()
                 val ring = if (running) PcmTap.ring else null
                 var any = false
@@ -165,7 +174,6 @@ internal fun rememberSpectrumFrames(bandCount: Int, stereo: Boolean, running: Bo
                     frames.hasSound = false
                     break
                 }
-                delay((FRAME_MS - (SystemClock.elapsedRealtime() - now)).coerceAtLeast(1))
             }
         } finally {
             if (running) PcmTap.release()
@@ -174,6 +182,7 @@ internal fun rememberSpectrumFrames(bandCount: Int, stereo: Boolean, running: Bo
     return frames
 }
 
-private const val FRAME_MS = 33L
+/** A vsync this early still counts as the next frame (they jitter). */
+private const val FRAME_SLACK_NS = 3_000_000L
 /** No sound for this long (a paused app, one that refuses capture): hide the visual. */
 private const val NO_SOUND_HIDE_MS = 1_500L

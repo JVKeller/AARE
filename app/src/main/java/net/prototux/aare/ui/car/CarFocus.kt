@@ -16,6 +16,7 @@ import android.util.Log
 import androidx.compose.foundation.border
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -87,6 +88,9 @@ object CarFocusVisibility {
      * from item to item.
      */
     var rotary by mutableStateOf(false)
+
+    /** When the car screen was last touched, or a knob or key used (elapsedRealtime), for things that wake on any input. */
+    var inputAt by mutableLongStateOf(0L)
 }
 
 /**

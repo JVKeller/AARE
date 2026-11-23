@@ -8,29 +8,42 @@ package net.prototux.aare.audio
  */
 enum class Mix { MONO, LEFT, RIGHT }
 
-class PcmRing(val sampleRate: Int, val channels: Int, capacityMs: Int = 2000) {
+class PcmRing(
+    val sampleRate: Int,
+    val channels: Int,
+    capacityMs: Int = 2000,
+    val targetLeadMs: Int = DEFAULT_TARGET_LEAD_MS,
+) {
     init {
         require(sampleRate > 0) { "sampleRate must be positive" }
         require(channels >= 1) { "channels must be >= 1" }
         require(capacityMs > 0) { "capacityMs must be positive" }
+        require(targetLeadMs >= 0) { "targetLeadMs must be >= 0" }
     }
 
     private val capacityFrames: Int = maxOf(1, (sampleRate.toLong() * capacityMs / 1000L).toInt())
+    private val targetLeadFrames: Long = sampleRate.toLong() * targetLeadMs / 1000L
     private val leftRing = ShortArray(capacityFrames)
     private val rightRing = ShortArray(capacityFrames)
 
     @Volatile private var written: Long = 0L
-    @Volatile private var anchorPos: Long = 0L
+    /** Anchor position in 1/1000ths of a frame (milliframes) so rate adjustments on every chunk never suffer integer truncation. */
+    @Volatile private var anchorMilliFrames: Long = 0L
     @Volatile private var anchorMs: Long = 0L
+    /** Playhead rate in parts per thousand (1000 = 1.0x nominal sampleRate). Gently steered toward [targetLeadFrames]. */
+    @Volatile private var ratePermille: Int = 1000
     @Volatile private var lastWriteMs: Long = 0L
     @Volatile private var hasData: Boolean = false
     @Volatile private var epoch: Long = 0L
 
-    private fun playheadAt(nowMs: Long, w: Long, aPos: Long, aMs: Long): Long {
+    private fun playheadMilliFramesAt(nowMs: Long, w: Long, aMilli: Long, aMs: Long, permille: Int): Long {
         val elapsedMs = maxOf(0L, nowMs - aMs)
-        val advanced = elapsedMs * sampleRate / 1000L
-        return minOf(w, aPos + advanced)
+        val advancedMilli = elapsedMs * sampleRate * permille / 1_000L
+        return minOf(w * 1_000L, aMilli + advancedMilli)
     }
+
+    private fun playheadAt(nowMs: Long, w: Long, aMilli: Long, aMs: Long, permille: Int): Long =
+        playheadMilliFramesAt(nowMs, w, aMilli, aMs, permille) / 1_000L
 
     /** Capture thread: [length] bytes of PCM that just went to the car, at [nowMs] (elapsedRealtime). */
     fun write(buf: ByteArray, offset: Int, length: Int, nowMs: Long) {
@@ -39,9 +52,28 @@ class PcmRing(val sampleRate: Int, val channels: Int, capacityMs: Int = 2000) {
         if (frames <= 0) return
 
         val w = written
-        if (!hasData || nowMs - lastWriteMs > 500L || playheadAt(nowMs, w, anchorPos, anchorMs) >= w) {
-            anchorPos = w
+        val newWritten = w + frames
+        if (!hasData || nowMs - lastWriteMs > STREAM_GAP_MS) {
+            // New stream or after a long pause (>500 ms): re-anchor to start of this stream.
+            anchorMilliFrames = w * 1_000L
             anchorMs = nowMs
+            ratePermille = 1000
+        } else if (nowMs > anchorMs) {
+            // Continuous stream: never snap the playhead forward on a late chunk. Advance smoothly
+            // from the current playhead and gently trim the rate (±5%) toward targetLeadFrames
+            // behind the mid-chunk frontier so capture jitter never causes repeated stalls.
+            val curMilli = playheadMilliFramesAt(nowMs, w, anchorMilliFrames, anchorMs, ratePermille)
+            anchorMilliFrames = curMilli
+            anchorMs = nowMs
+            if (targetLeadFrames > 0L) {
+                val curPh = curMilli / 1_000L
+                val avgLead = w + frames / 2 - curPh
+                val errFrames = avgLead - targetLeadFrames
+                val adj = (errFrames * MAX_TRIM_PERMILLE / targetLeadFrames)
+                    .toInt()
+                    .coerceIn(-MAX_TRIM_PERMILLE, MAX_TRIM_PERMILLE)
+                ratePermille = 1000 + adj
+            }
         }
         lastWriteMs = nowMs
 
@@ -68,7 +100,7 @@ class PcmRing(val sampleRate: Int, val channels: Int, capacityMs: Int = 2000) {
                 if (idx == cap) idx = 0
             }
         }
-        written = w + frames
+        written = newWritten
         hasData = true
     }
 
@@ -85,11 +117,12 @@ class PcmRing(val sampleRate: Int, val channels: Int, capacityMs: Int = 2000) {
         if (n > cap) return false
 
         val w = written
-        val aPos = anchorPos
+        val aMilli = anchorMilliFrames
         val aMs = anchorMs
+        val permille = ratePermille
         if (w <= 0L) return false
 
-        val ph = playheadAt(nowMs, w, aPos, aMs)
+        val ph = playheadAt(nowMs, w, aMilli, aMs, permille)
         val delayFrames = maxOf(0, delayMs).toLong() * sampleRate / 1000L
         val endFrame = ph - delayFrames
         val startFrame = endFrame - n
@@ -137,7 +170,7 @@ class PcmRing(val sampleRate: Int, val channels: Int, capacityMs: Int = 2000) {
     fun leadMs(nowMs: Long): Long {
         if (!hasData) return 0L
         val w = written
-        val ph = playheadAt(nowMs, w, anchorPos, anchorMs)
+        val ph = playheadAt(nowMs, w, anchorMilliFrames, anchorMs, ratePermille)
         return maxOf(0L, (w - ph) * 1000L / sampleRate)
     }
 
@@ -145,8 +178,15 @@ class PcmRing(val sampleRate: Int, val channels: Int, capacityMs: Int = 2000) {
         epoch++
         hasData = false
         written = 0L
-        anchorPos = 0L
+        anchorMilliFrames = 0L
         anchorMs = 0L
+        ratePermille = 1000
         lastWriteMs = 0L
+    }
+
+    companion object {
+        const val DEFAULT_TARGET_LEAD_MS = 150
+        private const val STREAM_GAP_MS = 500L
+        private const val MAX_TRIM_PERMILLE = 50
     }
 }

@@ -6,7 +6,6 @@ import kotlin.math.ln
 import kotlin.math.log10
 import kotlin.math.pow
 import kotlin.math.sin
-import kotlin.math.sqrt
 
 object Spectrum {
     const val FLOOR_DB = -60f
@@ -44,7 +43,10 @@ class SpectrumAnalyzer(
     private val sinTable: FloatArray = FloatArray(halfN)
     private val re: FloatArray = FloatArray(fftSize)
     private val im: FloatArray = FloatArray(fftSize)
-    private val binDb: FloatArray = FloatArray(halfN + 1)
+    /** Unnormalized magnitude squared (re^2 + im^2) for bins 0..N/2. */
+    private val magSq: FloatArray = FloatArray(halfN + 1)
+    private val normSq: Float = (4f / fftSize.toFloat()) * (4f / fftSize.toFloat())
+    private val minMagSq: Float = 10f.pow(MIN_DB_COMPUTE / 10f)
 
     init {
         // Log-spaced band edges from effectiveMinHz to effectiveMaxHz
@@ -118,6 +120,11 @@ class SpectrumAnalyzer(
         }
     }
 
+    private fun dbAt(k: Int): Float {
+        val m2 = magSq[k] * normSq
+        return if (m2 <= minMagSq) MIN_DB_COMPUTE else 10f * log10(m2)
+    }
+
     /**
      * [samples]: fftSize values in -1..1, oldest first (one channel, already mixed).
      * Writes dBFS per band into [out] (size bandCount, low band first), clamped to [FLOOR_DB, 0].
@@ -169,40 +176,36 @@ class SpectrumAnalyzer(
             len = len shl 1
         }
 
-        // 3. Compute amplitude-compensated dBFS for bins 0..N/2
-        // Scale factor 4 / N compensates one-sided spectrum (2/N) and Hann coherent gain (1/0.5 = 2).
-        val norm = 4f / n.toFloat()
-        val minDbCompute = -120f
-        val minMag = 10f.pow(minDbCompute / 20f)
-        binDb[0] = minDbCompute
+        // 3. Compute magnitude squared for bins 1..N/2 (no sqrt or log10 across all 1024 bins)
+        magSq[0] = 0f
         for (k in 1..halfN) {
             val r = re[k]
             val m = im[k]
-            val mag = sqrt(r * r + m * m) * norm
-            binDb[k] = if (mag <= minMag) minDbCompute else 20f * log10(mag)
+            magSq[k] = r * r + m * m
         }
 
-        // 4. Per band, find max bin and refine with 3-point parabolic interpolation in dB
+        // 4. Per band, find max bin by magnitude squared and compute log10 only for bestK and its 2 neighbors
         val maxNonNyquist = halfN - 1
         for (b in 0 until bandCount) {
             val kStart = bandStartBin[b]
             val kEnd = bandEndBin[b]
             var bestK = kStart
-            var bestVal = binDb[kStart]
+            var bestMagSq = magSq[kStart]
             for (k in (kStart + 1)..kEnd) {
-                val v = binDb[k]
-                if (v > bestVal) {
-                    bestVal = v
+                val v = magSq[k]
+                if (v > bestMagSq) {
+                    bestMagSq = v
                     bestK = k
                 }
             }
 
+            val bestVal = dbAt(bestK)
             // Parabolic peak interpolation on log-magnitudes (dB) with neighbor bins (excluding DC bin 0)
             var peakDb = bestVal
             if (bestK in 2 until maxNonNyquist) {
-                val alpha = binDb[bestK - 1]
+                val alpha = dbAt(bestK - 1)
                 val beta = bestVal
-                val gamma = binDb[bestK + 1]
+                val gamma = dbAt(bestK + 1)
                 if (beta >= alpha && beta >= gamma) {
                     val denom = alpha - 2f * beta + gamma
                     if (denom < -1e-5f) {
@@ -214,7 +217,7 @@ class SpectrumAnalyzer(
                 // For bin 1, avoid using DC bin 0 as left neighbor; if bin 2 is strong (between bin 1 and 2),
                 // estimate scalloping correction from the two-bin Hann mainlobe drop.
                 val beta = bestVal
-                val gamma = binDb[2]
+                val gamma = dbAt(2)
                 if (beta >= gamma && beta - gamma <= 6f) {
                     // Hann mainlobe at offset p in [0, 0.5] drops by up to ~1.42 dB when beta == gamma
                     val ratio = 1f - (beta - gamma) / 6f
@@ -224,6 +227,10 @@ class SpectrumAnalyzer(
 
             out[b] = peakDb.coerceIn(Spectrum.FLOOR_DB, 0f)
         }
+    }
+
+    private companion object {
+        private const val MIN_DB_COMPUTE = -120f
     }
 }
 

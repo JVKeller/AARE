@@ -79,7 +79,7 @@ class ProjectionDisplay(
 
     fun dispatchTouch(event: MotionEvent) {
         main.post {
-            if (event.actionMasked == MotionEvent.ACTION_DOWN) CarFocusVisibility.keyInput = false
+            if (event.actionMasked == MotionEvent.ACTION_DOWN) { CarFocusVisibility.keyInput = false; CarFocusVisibility.inputAt = android.os.SystemClock.elapsedRealtime() }
             presentation?.window?.decorView?.dispatchTouchEvent(event)
             event.recycle()
         }
@@ -88,6 +88,7 @@ class ProjectionDisplay(
     fun dispatchKey(event: KeyEvent) {
         main.post {
             val decor = presentation?.window?.decorView ?: return@post
+            if (event.action == KeyEvent.ACTION_DOWN) CarFocusVisibility.inputAt = android.os.SystemClock.elapsedRealtime()
             // Injected keys skip the view root's input stages, which is where a navigation key
             // normally takes a window out of touch mode. Left in it, Compose stays in touch input
             // mode, where clickables can't take focus: a rotary knob or D-pad would have nothing to

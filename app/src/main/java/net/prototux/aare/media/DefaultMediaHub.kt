@@ -142,6 +142,9 @@ class DefaultMediaHub(context: Context, scope: CoroutineScope) : MediaHub {
     override fun exitFullScreen() { visualFullScreen = false }
 
     @Composable
+    override fun CardVisual(modifier: Modifier) = MediaCardVisual(this, modifier)
+
+    @Composable
     override fun FullScreen(driving: Boolean, modifier: Modifier) = VisualizerFullScreen(this, driving, modifier)
 
     override fun release() {

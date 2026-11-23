@@ -625,12 +625,14 @@
     <string name="visuals_entry_on">On: %1$s</string>
     <string name="visuals_entry_off">Off</string>
     <string name="visualizer_bars_title">Bars</string>
-    <string name="visualizer_bars_segmented">Segmented</string>
-    <string name="visualizer_bars_solid">Solid</string>
+    <string name="visualizer_bars_rounded">Rounded</string>
+    <string name="visualizer_bars_square">Square</string>
     <string name="visualizer_opacity_title">Opacity</string>
     <string name="visualizer_opacity_value">%1$d%%</string>
     <string name="visualizer_opacity_less">Less opaque</string>
     <string name="visualizer_opacity_more">More opaque</string>
+    <string name="visualizer_on_card">On the dashboard</string>
+    <string name="visualizer_on_card_subtitle">Bars behind the media card on the car\'s home screen.</string>
     <string name="visualizer_peaks">Peak marks</string>
     <string name="visualizer_peaks_subtitle">A mark over each bar holds its highest point for a moment, then falls.</string>
     <string name="visualizer_fall_title">Fall speed</string>

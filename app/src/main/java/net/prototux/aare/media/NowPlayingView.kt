@@ -1,27 +1,6 @@
 package net.prototux.aare.media
 
 import android.os.SystemClock
-import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.focusable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEvent
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.isShiftPressed
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onKeyEvent
-import androidx.compose.ui.input.key.type
-import androidx.compose.ui.input.pointer.pointerInput
-import net.prototux.aare.ui.car.CarFocusVisibility
-import net.prototux.aare.ui.car.CarKnobCapture
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -60,6 +39,7 @@ import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -79,8 +59,15 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.animation.core.Animatable
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.graphics.graphicsLayer
 import kotlinx.coroutines.delay
 import net.prototux.aare.R
+import net.prototux.aare.ui.car.CarFocusVisibility
 import net.prototux.aare.ui.car.carFocusHighlight
 import net.prototux.aare.ui.theme.LocalCarDimens
 
@@ -153,49 +140,131 @@ internal fun NowPlayingView(hub: DefaultMediaHub, source: PlaybackSource, state:
                         strip(Modifier.matchParentSize())
                         Column(Modifier.fillMaxWidth()) { Details(state, info, source) }
                     }
-                } else {
-                    Row(Modifier.weight(1f).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        // With a visual, the art a quarter smaller and the text level with its top:
-                        // even room above and below, with no top bar.
-                        val height = if (visual != null) VISUAL_ART_HEIGHT else 1f
-                        art(Modifier.fillMaxHeight(height).aspectRatio(1f))
-                        Spacer(Modifier.width(28.dp))
-                        if (visual != null) {
-                            // The text at the top, the bars in the room below it.
-                            Column(Modifier.weight(1f).fillMaxHeight(height)) {
-                                // Room at the end for the floating library button.
-                                Box(Modifier.padding(end = if (floatingBar) LocalCarDimens.current.touchTarget + 8.dp else 0.dp)) {
-                                    Column { Details(state, info, source) }
-                                }
+                } else if (visual != null) {
+                    // The art a quarter smaller and the text level with its top; the bars fill the
+                    // room below the progress down to the bottom, under the floating controls.
+                    val wake = remember { IslandWake() }
+                    BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().wakes(wake)) {
+                        val artTop = maxHeight * (1f - VISUAL_ART_HEIGHT) / 2
+                        Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
+                            art(Modifier.fillMaxHeight(VISUAL_ART_HEIGHT).aspectRatio(1f))
+                            Spacer(Modifier.width(28.dp))
+                            Column(Modifier.weight(1f).fillMaxHeight().padding(top = artTop)) {
+                                // Room at the end of the text for the floating library button.
+                                Details(state, info, source, textEnd = if (floatingBar) LocalCarDimens.current.touchTarget + 8.dp else 0.dp)
                                 Spacer(Modifier.height(12.dp))
                                 strip(Modifier.weight(1f).fillMaxWidth())
                             }
-                        } else {
-                            Column(Modifier.weight(1f)) { Details(state, info, source) }
                         }
+                        IslandControls(hub, source, state, setView, wake, wakeKey = info.title to info.playing, Modifier.align(Alignment.BottomCenter))
+                    }
+                } else {
+                    Row(Modifier.weight(1f).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        art(Modifier.fillMaxHeight().aspectRatio(1f))
+                        Spacer(Modifier.width(28.dp))
+                        Column(Modifier.weight(1f)) { Details(state, info, source) }
                     }
                 }
-                Spacer(Modifier.height(12.dp))
-                Controls(hub, source, state, setView)
+                if (portrait || visual == null) {
+                    Spacer(Modifier.height(12.dp))
+                    Controls(hub, source, state, setView)
+                }
             }
         }
     }
 }
 
+/** When the player was last touched, or the knob or a key used on it. */
+private class IslandWake {
+    var at by mutableLongStateOf(SystemClock.elapsedRealtime())
+    fun now() { at = SystemClock.elapsedRealtime() }
+}
+
+/** Any touch, knob turn or key in this area wakes [wake]; nothing is consumed. */
+private fun Modifier.wakes(wake: IslandWake): Modifier = this
+    .onPreviewKeyEvent { wake.now(); false }
+    .pointerInput(wake) {
+        awaitPointerEventScope {
+            while (true) {
+                awaitPointerEvent(PointerEventPass.Initial)
+                wake.now()
+            }
+        }
+    }
+
+/**
+ * The transport buttons as an island floating over the bars: the play button in the middle, bigger
+ * than the pill around the others. A few seconds after [wake] (or [wakeKey] changing: a new track,
+ * play or pause) the others fold into the play button and it drops away off the bottom; on the next
+ * input it rises back and they unfold. Hidden, it's off the screen, so touches can't hit it.
+ */
 @Composable
-private fun Details(state: SourceState, info: PlaybackInfo, source: PlaybackSource) {
-    state.error?.let {
-        ErrorCard(it, Modifier.fillMaxWidth())
-        Spacer(Modifier.height(12.dp))
+private fun IslandControls(
+    hub: DefaultMediaHub, source: PlaybackSource, state: SourceState, setView: (MediaView) -> Unit,
+    wake: IslandWake, wakeKey: Any?, modifier: Modifier,
+) {
+    val touch = LocalCarDimens.current.touchTarget
+    var awake by remember { mutableStateOf(true) }
+    LaunchedEffect(wakeKey) { wake.now() }
+    // Any input on the car screen: the shell's knob handling uses up turns and tilts before they get here.
+    LaunchedEffect(CarFocusVisibility.inputAt) { if (CarFocusVisibility.inputAt != 0L) wake.now() }
+    LaunchedEffect(wake.at) {
+        awake = true
+        delay(ISLAND_FADE_MS)
+        awake = false
     }
-    Text(info.title, style = MaterialTheme.typography.headlineMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-    if (info.artist.isNotEmpty()) {
-        Text(info.artist, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1, overflow = TextOverflow.Ellipsis)
+    val unfold = remember { Animatable(1f) }
+    val rise = remember { Animatable(1f) }
+    LaunchedEffect(awake) {
+        if (awake) islandShow(rise, unfold) else islandHide(rise, unfold)
     }
-    if (info.album.isNotEmpty()) {
-        Text(info.album, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1, overflow = TextOverflow.Ellipsis)
+    BoxWithConstraints(modifier) {
+        val hasQueue = state.queue.isNotEmpty()
+        val slots = ((maxWidth - ISLAND_PLAY_SIZE - touch * 2) / touch).toInt() - (if (hasQueue) 1 else 0)
+        val actions = state.actions.take(slots.coerceAtLeast(0))
+        val left = actions.take((actions.size + 1) / 2)
+        Island(
+            unfold = { unfold.value }, rise = { rise.value }, fromTop = false,
+            modifier = Modifier.padding(bottom = 4.dp), pillHeight = touch + 8.dp, centerSize = ISLAND_PLAY_SIZE,
+            pillColor = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.85f),
+            start = {
+                left.forEach { ActionButton(hub, it) }
+                CircleButton(Icons.Rounded.SkipPrevious, stringResource(R.string.media_action_previous), onClick = source::previous, enabled = state.canPrevious)
+            },
+            center = {
+                CircleButton(
+                    if (state.showPause) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, stringResource(if (state.showPause) R.string.media_action_pause else R.string.media_action_play),
+                    onClick = source::playPause, filled = true, size = ISLAND_PLAY_SIZE,
+                )
+            },
+            end = {
+                CircleButton(Icons.Rounded.SkipNext, stringResource(R.string.media_action_next), onClick = source::next, enabled = state.canNext)
+                actions.drop(left.size).forEach { ActionButton(hub, it) }
+                if (hasQueue) CircleButton(Icons.AutoMirrored.Rounded.QueueMusic, stringResource(R.string.media_queue_title), onClick = { setView(MediaView.QUEUE) })
+            },
+        )
+    }
+}
+
+private const val ISLAND_FADE_MS = 4_000L
+
+/** Title, artist, album and progress. [textEnd]: room kept at the end of the text only (the progress runs the full width). */
+@Composable
+private fun Details(state: SourceState, info: PlaybackInfo, source: PlaybackSource, textEnd: Dp = 0.dp) {
+    Column(Modifier.padding(end = textEnd)) {
+        state.error?.let {
+            ErrorCard(it, Modifier.fillMaxWidth())
+            Spacer(Modifier.height(12.dp))
+        }
+        Text(info.title, style = MaterialTheme.typography.headlineMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        if (info.artist.isNotEmpty()) {
+            Text(info.artist, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        if (info.album.isNotEmpty()) {
+            Text(info.album, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
     }
     Spacer(Modifier.height(16.dp))
     Progress(info, state.canSeek, source::seekTo)
@@ -208,9 +277,10 @@ private fun Details(state: SourceState, info: PlaybackInfo, source: PlaybackSour
 @Composable
 private fun Controls(hub: DefaultMediaHub, source: PlaybackSource, state: SourceState, setView: (MediaView) -> Unit) {
     val touch = LocalCarDimens.current.touchTarget
+    val playSize = PLAY_SIZE
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val hasQueue = state.queue.isNotEmpty()
-        val slots = ((maxWidth - PLAY_SIZE - touch * 2) / touch).toInt() - (if (hasQueue) 1 else 0)
+        val slots = ((maxWidth - playSize - touch * 2) / touch).toInt() - (if (hasQueue) 1 else 0)
         val actions = state.actions.take(slots.coerceAtLeast(0))
         val left = actions.take((actions.size + 1) / 2)
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceEvenly) {
@@ -218,7 +288,7 @@ private fun Controls(hub: DefaultMediaHub, source: PlaybackSource, state: Source
             CircleButton(Icons.Rounded.SkipPrevious, stringResource(R.string.media_action_previous), onClick = source::previous, enabled = state.canPrevious)
             CircleButton(
                 if (state.showPause) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, stringResource(if (state.showPause) R.string.media_action_pause else R.string.media_action_play),
-                onClick = source::playPause, filled = true, size = PLAY_SIZE,
+                onClick = source::playPause, filled = true, size = playSize,
             )
             CircleButton(Icons.Rounded.SkipNext, stringResource(R.string.media_action_next), onClick = source::next, enabled = state.canNext)
             actions.drop(left.size).forEach { ActionButton(hub, it) }
@@ -228,6 +298,7 @@ private fun Controls(hub: DefaultMediaHub, source: PlaybackSource, state: Source
 }
 
 private val PLAY_SIZE = 96.dp
+private val ISLAND_PLAY_SIZE = 100.dp
 
 /** Position extrapolated from the last sample while playing; a slider when seeking is allowed. */
 @Composable
@@ -244,55 +315,18 @@ private fun Progress(info: PlaybackInfo, canSeek: Boolean, seekTo: (Long) -> Uni
     val pos = if (info.durationMs > 0) raw.coerceIn(0, info.durationMs) else raw.coerceAtLeast(0)
     var dragging by remember { mutableStateOf(false) }
     var dragValue by remember { mutableFloatStateOf(0f) }
-    // The knob: pressing the bar takes the knob for scrubbing (turns and left/right tilts step
-    // through the song), pressing again gives it back. The app seeks once the turning pauses.
-    var knobEngaged by remember { mutableStateOf(false) }
-    var knobTarget by remember { mutableStateOf<Long?>(null) }
-    var knobStreak by remember { mutableIntStateOf(0) }
-    var knobDir by remember { mutableIntStateOf(0) }
-    var knobLast by remember { mutableLongStateOf(0L) }
-    val latestPos by rememberUpdatedState(pos)
-    val latestSeek by rememberUpdatedState(seekTo)
-    fun knobStep(dir: Int) {
-        if (info.durationMs <= 0) return
-        val t = SystemClock.uptimeMillis()
-        if (t - knobLast > KNOB_STREAK_MS || dir != knobDir) knobStreak = 0
-        knobLast = t
-        knobDir = dir
-        knobStreak++
-        val step = when {
-            knobStreak <= 3 -> 5_000L
-            knobStreak <= 6 -> 15_000L
-            else -> 30_000L
-        }
-        knobTarget = ((knobTarget ?: latestPos) + dir * step).coerceIn(0L, info.durationMs)
-    }
-    LaunchedEffect(knobTarget) {
-        val t = knobTarget ?: return@LaunchedEffect
-        delay(KNOB_SETTLE_MS)
-        latestSeek(t)
-        // Keep showing the target until the app's new position has had time to come in.
-        delay(KNOB_SHOW_MS)
-        knobTarget = null
-    }
     if (info.durationMs > 0) {
         val fraction = pos.toFloat() / info.durationMs
         if (canSeek) {
-            SeekBar(
-                fraction = when {
-                    dragging -> dragValue
-                    knobTarget != null -> knobTarget!!.toFloat() / info.durationMs
-                    else -> fraction
-                },
-                engaged = knobEngaged,
-                onEngage = { knobEngaged = it; if (!it) knobStreak = 0 },
-                onKnobStep = ::knobStep,
-                onDrag = { dragging = true; dragValue = it },
-                onDragEnd = {
+            Slider(
+                value = if (dragging) dragValue else fraction,
+                onValueChange = { dragging = true; dragValue = it },
+                onValueChangeFinished = {
                     seekTo((dragValue * info.durationMs).toLong())
                     dragging = false
                 },
-                modifier = Modifier.fillMaxWidth(),
+                // The knob's focus ring, like the other controls (the slider has none of its own).
+                modifier = Modifier.fillMaxWidth().height(48.dp).clip(RoundedCornerShape(24.dp)).carFocusHighlight(RoundedCornerShape(24.dp)),
             )
         } else {
             LinearProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)))
@@ -300,7 +334,7 @@ private fun Progress(info: PlaybackInfo, canSeek: Boolean, seekTo: (Long) -> Uni
         }
     }
     Row(Modifier.fillMaxWidth()) {
-        val shown = if (dragging) (dragValue * info.durationMs).toLong() else knobTarget ?: pos
+        val shown = if (dragging) (dragValue * info.durationMs).toLong() else pos
         Text(formatTime(shown), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.weight(1f))
         if (info.durationMs > 0) {
@@ -308,89 +342,6 @@ private fun Progress(info: PlaybackInfo, canSeek: Boolean, seekTo: (Long) -> Uni
         }
     }
 }
-
-/**
- * The seekable progress bar. The knob lands on it like a button (with the focus ring); a press
- * takes the knob for scrubbing (turns and left/right tilts step, thicker bar with a thumb), and a
- * press or Back gives it back. Up/down tilts never seek: they move on as from any other item.
- * Cars without a knob (a D-pad) step with left/right on the focused bar, as the old slider did.
- * Touch taps or drags it.
- */
-@Composable
-private fun SeekBar(
-    fraction: Float,
-    engaged: Boolean,
-    onEngage: (Boolean) -> Unit,
-    onKnobStep: (Int) -> Unit,
-    onDrag: (Float) -> Unit,
-    onDragEnd: () -> Unit,
-    modifier: Modifier,
-) {
-    var focused by remember { mutableStateOf(false) }
-    val latestStep by rememberUpdatedState(onKnobStep)
-    val latestEngage by rememberUpdatedState(onEngage)
-    BackHandler(enabled = engaged) { latestEngage(false) }
-    DisposableEffect(engaged) {
-        if (!engaged) return@DisposableEffect onDispose {}
-        val handler: (KeyEvent) -> Boolean? = { e ->
-            val down = e.type == KeyEventType.KeyDown
-            when (e.key) {
-                Key.Tab -> { if (down) latestStep(if (e.isShiftPressed) -1 else 1); true }
-                Key.DirectionLeft, Key.DirectionRight -> { if (down) latestStep(if (e.key == Key.DirectionRight) 1 else -1); true }
-                Key.DirectionUp, Key.DirectionDown -> true
-                Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> { if (e.type == KeyEventType.KeyUp) latestEngage(false); true }
-                else -> null
-            }
-        }
-        CarKnobCapture.handler = handler
-        onDispose { if (CarKnobCapture.handler === handler) CarKnobCapture.handler = null }
-    }
-    val track = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f)
-    val fill = MaterialTheme.colorScheme.primary
-    val shape = RoundedCornerShape(20.dp)
-    val f = fraction.coerceIn(0f, 1f)
-    Canvas(
-        modifier.height(40.dp).clip(shape).carFocusHighlight(shape)
-            .onFocusChanged {
-                focused = it.isFocused
-                if (!it.isFocused && engaged) latestEngage(false)
-            }
-            .onKeyEvent { e ->
-                when (e.key) {
-                    Key.DirectionCenter, Key.Enter, Key.NumPadEnter -> {
-                        if (e.type == KeyEventType.KeyUp) latestEngage(true)
-                        true
-                    }
-                    // No knob: left/right on the focused bar step, like the slider did.
-                    Key.DirectionLeft, Key.DirectionRight -> if (!CarFocusVisibility.rotary) {
-                        if (e.type == KeyEventType.KeyDown) latestStep(if (e.key == Key.DirectionRight) 1 else -1)
-                        true
-                    } else false
-                    else -> false
-                }
-            }
-            .focusable()
-            .pointerInput(Unit) { detectTapGestures { onDrag((it.x / size.width).coerceIn(0f, 1f)); onDragEnd() } }
-            .pointerInput(Unit) {
-                detectHorizontalDragGestures(onDragEnd = onDragEnd) { change, _ -> onDrag((change.position.x / size.width).coerceIn(0f, 1f)) }
-            },
-    ) {
-        val y = size.height / 2
-        val inset = 14.dp.toPx()
-        val w = size.width - 2 * inset
-        val stroke = (if (engaged) 10.dp else if (focused) 7.dp else 5.dp).toPx()
-        drawLine(track, Offset(inset, y), Offset(inset + w, y), strokeWidth = stroke, cap = StrokeCap.Round)
-        drawLine(fill, Offset(inset, y), Offset(inset + w * f, y), strokeWidth = stroke, cap = StrokeCap.Round)
-        drawCircle(fill, radius = (if (engaged) 12.dp else 8.dp).toPx(), center = Offset(inset + w * f, y))
-    }
-}
-
-/** Knob clicks closer together than this keep a scrub's step growing. */
-private const val KNOB_STREAK_MS = 700L
-/** The app seeks once the knob has been still this long. */
-private const val KNOB_SETTLE_MS = 450L
-/** After that seek, how long the bar keeps showing the target while the app's position comes in. */
-private const val KNOB_SHOW_MS = 1_500L
 
 /** An app-defined button: its icon (tinted like ours) or, failing that, a short label. */
 @Composable

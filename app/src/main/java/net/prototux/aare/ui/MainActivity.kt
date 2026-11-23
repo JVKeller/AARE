@@ -944,6 +944,7 @@ private fun VisualizerSection(settings: Settings) {
     var bars by remember { mutableStateOf(settings.visualizerBars) }
     var opacity by remember { mutableIntStateOf(settings.visualizerOpacityPct) }
     var peaks by remember { mutableStateOf(settings.visualizerPeaks) }
+    var onCard by remember { mutableStateOf(settings.visualizerOnCard) }
     var fall by remember { mutableStateOf(settings.visualizerFall) }
     var art by remember { mutableStateOf(settings.visualizerArtBackground) }
     Section(stringResource(R.string.visualizer_section)) {
@@ -958,13 +959,16 @@ private fun VisualizerSection(settings: Settings) {
             art = it; settings.visualizerArtBackground = it
         }
         Choices(stringResource(R.string.visualizer_bars_title), listOf(
-            Settings.VISUAL_BARS_SEGMENTED to stringResource(R.string.visualizer_bars_segmented),
-            Settings.VISUAL_BARS_SOLID to stringResource(R.string.visualizer_bars_solid),
+            Settings.VISUAL_BARS_ROUNDED to stringResource(R.string.visualizer_bars_rounded),
+            Settings.VISUAL_BARS_SQUARE to stringResource(R.string.visualizer_bars_square),
         ), bars) { bars = it; settings.visualizerBars = it }
         Choices(stringResource(R.string.visualizer_colors_title), listOf(
             Settings.VISUAL_COLORS_SPECTRAL to stringResource(R.string.visualizer_colors_spectral),
             Settings.VISUAL_COLORS_SYSTEM to stringResource(R.string.visualizer_colors_system),
         ), colors) { colors = it; settings.visualizerColors = it }
+        Toggle(stringResource(R.string.visualizer_on_card), stringResource(R.string.visualizer_on_card_subtitle), onCard) {
+            onCard = it; settings.visualizerOnCard = it
+        }
         Toggle(stringResource(R.string.visualizer_peaks), stringResource(R.string.visualizer_peaks_subtitle), peaks) {
             peaks = it; settings.visualizerPeaks = it
         }

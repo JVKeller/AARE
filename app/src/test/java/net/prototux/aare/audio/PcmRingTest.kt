@@ -5,6 +5,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
 class PcmRingTest {
 
@@ -92,7 +94,7 @@ class PcmRingTest {
 
     @Test fun delayReturnsWindowEndingDelayMsBeforePlayhead() {
         val rate = 1000 // 1 frame per ms
-        val ring = PcmRing(sampleRate = rate, channels = 1, capacityMs = 2000)
+        val ring = PcmRing(sampleRate = rate, channels = 1, capacityMs = 2000, targetLeadMs = 0)
         // Write 500 frames in real time (10 chunks of 50 ms) with sample value = frame index
         for (c in 0 until 10) {
             val base = c * 50
@@ -167,7 +169,7 @@ class PcmRingTest {
 
     @Test fun tooOldOrNothingWrittenReturnsFalseAndLeavesDstAlone() {
         val rate = 1000
-        val ring = PcmRing(sampleRate = rate, channels = 1, capacityMs = 500)
+        val ring = PcmRing(sampleRate = rate, channels = 1, capacityMs = 500, targetLeadMs = 0)
         val sentinel = FloatArray(100) { 42f }
 
         // Nothing written yet
@@ -213,5 +215,93 @@ class PcmRingTest {
         for (i in 0 until 80) {
             assertEquals(((i - 40) * 500) / 32768f, mono[i], 1e-6f)
         }
+    }
+
+    @Test fun burstyWritesGiveMonotonicEvenlyAdvancingReadWindow() {
+        val rate = 1000 // 1 frame per ms
+        val ring = PcmRing(sampleRate = rate, channels = 1, capacityMs = 2000) // default 150 ms target lead
+        var writtenFrames = 0
+
+        fun writeChunk(frames: Int, nowMs: Long) {
+            val base = writtenFrames
+            val chunk = packMono(frames) { i -> (base + i).toShort() }
+            ring.write(chunk, 0, chunk.size, nowMs = nowMs)
+            writtenFrames += frames
+        }
+
+        // Prime with 200 ms burst at t=1000 (as CarAudioOut PRIME_MS = 200 does)
+        repeat(4) { writeChunk(50, 1000L) }
+
+        // Simulate jittery capture where 40 ms chunks arrive with uneven delays up to +90 ms late
+        // (e.g. a 110 ms gap followed by rapid catch-up chunks so average rate == 1.0x real time):
+        val jitterMs = listOf(0L, -10L, 70L, 40L, 0L, -15L, 85L, 30L)
+        val arrivals = (1..36).map { k ->
+            val nominal = k * 40L
+            nominal + jitterMs[k % jitterMs.size]
+        }.sorted()
+        var nextWriteIdx = 0
+
+        val dst = FloatArray(32)
+        var prevEndSample = -1
+        // Sample the UI every 20 ms from t=1040 to t=2440 with delayMs = 0
+        for (t in 1040L..2440L step 20L) {
+            while (nextWriteIdx < arrivals.size && 1000L + arrivals[nextWriteIdx] <= t) {
+                writeChunk(40, 1000L + arrivals[nextWriteIdx])
+                nextWriteIdx++
+            }
+            assertTrue("Read succeeds at t=$t", ring.read(nowMs = t, delayMs = 0, mix = Mix.MONO, dst = dst))
+            val endSample = (dst.last() * 32768f).roundToInt()
+            if (prevEndSample >= 0) {
+                val step = endSample - prevEndSample
+                // Nominal step is 20 frames; with ±5% trim it must always advance by 18..22 frames (never 0 or a big jump!)
+                assertTrue(
+                    "Read window must advance smoothly at t=$t: prev=$prevEndSample, cur=$endSample (step=$step)",
+                    step in 18..22
+                )
+            }
+            prevEndSample = endSample
+        }
+    }
+
+    @Test fun leadConvergesToTargetLeadMs() {
+        val rate = 1000
+        val ring = PcmRing(sampleRate = rate, channels = 1, capacityMs = 2000, targetLeadMs = 150)
+        var writtenFrames = 0
+
+        // Start with zero lead: write 40-frame chunks every 40 ms for 6 seconds (150 chunks)
+        for (c in 0..150) {
+            val base = writtenFrames
+            val chunk = packMono(40) { i -> ((base + i) % 10000).toShort() }
+            ring.write(chunk, 0, chunk.size, nowMs = 1000L + c * 40L)
+            writtenFrames += 40
+        }
+        // Right after a write at t=7000, lead is target + half chunk; check mid-chunk (+20 ms)
+        val convergedFromLow = ring.leadMs(1000L + 150 * 40L + 20L)
+        assertTrue(
+            "Lead starting from 0 should converge near 150 ms, got $convergedFromLow ms",
+            abs(convergedFromLow - 150L) <= 25L
+        )
+
+        // Now start with a huge 400 ms burst lead at t=10000 and stream 40 ms chunks every 40 ms for 10 seconds (250 chunks)
+        ring.clear()
+        writtenFrames = 0
+        repeat(10) {
+            val base = writtenFrames
+            val chunk = packMono(40) { i -> ((base + i) % 10000).toShort() }
+            ring.write(chunk, 0, chunk.size, nowMs = 10_000L)
+            writtenFrames += 40
+        }
+        assertEquals(400L, ring.leadMs(10_000L))
+        for (c in 1..250) {
+            val base = writtenFrames
+            val chunk = packMono(40) { i -> ((base + i) % 10000).toShort() }
+            ring.write(chunk, 0, chunk.size, nowMs = 10_000L + c * 40L)
+            writtenFrames += 40
+        }
+        val convergedFromHigh = ring.leadMs(10_000L + 250 * 40L + 20L)
+        assertTrue(
+            "Lead starting from 400 ms should converge near 150 ms, got $convergedFromHigh ms",
+            abs(convergedFromHigh - 150L) <= 25L
+        )
     }
 }

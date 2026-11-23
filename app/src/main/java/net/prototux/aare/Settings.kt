@@ -285,15 +285,20 @@ class Settings(context: Context) {
         get() = prefs.getString("visualizer_colors", VISUAL_COLORS_SPECTRAL) ?: VISUAL_COLORS_SPECTRAL
         set(v) = prefs.edit { putString("visualizer_colors", v) }
 
-    /** [VISUAL_BARS_SEGMENTED] (LED-style blocks) or [VISUAL_BARS_SOLID]. */
+    /** [VISUAL_BARS_ROUNDED] or [VISUAL_BARS_SQUARE] corners (an older value reads as rounded). */
     var visualizerBars: String
-        get() = prefs.getString("visualizer_bars", VISUAL_BARS_SEGMENTED) ?: VISUAL_BARS_SEGMENTED
+        get() = if (prefs.getString("visualizer_bars", null) == VISUAL_BARS_SQUARE) VISUAL_BARS_SQUARE else VISUAL_BARS_ROUNDED
         set(v) = prefs.edit { putString("visualizer_bars", v) }
 
     /** How opaque the bars are, in percent ([VISUAL_OPACITY_MIN]..100). */
     var visualizerOpacityPct: Int
         get() = prefs.getInt("visualizer_opacity_pct", 100).coerceIn(VISUAL_OPACITY_MIN, 100)
         set(v) = prefs.edit { putInt("visualizer_opacity_pct", v.coerceIn(VISUAL_OPACITY_MIN, 100)) }
+
+    /** The visualizer behind the dashboard's media card. */
+    var visualizerOnCard: Boolean
+        get() = prefs.getBoolean("visualizer_on_card", true)
+        set(v) = prefs.edit { putBoolean("visualizer_on_card", v) }
 
     /** A peak mark over each bar that holds a moment, then falls. */
     var visualizerPeaks: Boolean
@@ -490,8 +495,8 @@ class Settings(context: Context) {
         const val VISUAL_SPECTRUM = "spectrum"
         const val VISUAL_COLORS_SPECTRAL = "spectral"
         const val VISUAL_COLORS_SYSTEM = "system"
-        const val VISUAL_BARS_SEGMENTED = "segmented"
-        const val VISUAL_BARS_SOLID = "solid"
+        const val VISUAL_BARS_ROUNDED = "rounded"
+        const val VISUAL_BARS_SQUARE = "square"
         const val VISUAL_OPACITY_MIN = 30
         const val VISUAL_FALL_SLOW = "slow"
         const val VISUAL_FALL_NORMAL = "normal"

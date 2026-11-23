@@ -114,6 +114,7 @@ private fun CarVisualsSettings(settings: Settings, modifier: Modifier) {
     var bars by remember { mutableStateOf(settings.visualizerBars) }
     var opacity by remember { mutableIntStateOf(settings.visualizerOpacityPct) }
     var peaks by remember { mutableStateOf(settings.visualizerPeaks) }
+    var onCard by remember { mutableStateOf(settings.visualizerOnCard) }
     var fall by remember { mutableStateOf(settings.visualizerFall) }
     var art by remember { mutableStateOf(settings.visualizerArtBackground) }
     var delay by remember { mutableIntStateOf(settings.visualizerDelayMs) }
@@ -133,8 +134,8 @@ private fun CarVisualsSettings(settings: Settings, modifier: Modifier) {
         item { SwitchRow(stringResource(R.string.visualizer_art_background), art) { art = it; settings.visualizerArtBackground = it } }
         item {
             Choice(stringResource(R.string.visualizer_bars_title), listOf(
-                Settings.VISUAL_BARS_SEGMENTED to stringResource(R.string.visualizer_bars_segmented),
-                Settings.VISUAL_BARS_SOLID to stringResource(R.string.visualizer_bars_solid),
+                Settings.VISUAL_BARS_ROUNDED to stringResource(R.string.visualizer_bars_rounded),
+                Settings.VISUAL_BARS_SQUARE to stringResource(R.string.visualizer_bars_square),
             ), bars) { bars = it; settings.visualizerBars = it }
         }
         item {
@@ -143,6 +144,7 @@ private fun CarVisualsSettings(settings: Settings, modifier: Modifier) {
                 Settings.VISUAL_COLORS_SYSTEM to stringResource(R.string.visualizer_colors_system),
             ), colors) { colors = it; settings.visualizerColors = it }
         }
+        item { SwitchRow(stringResource(R.string.visualizer_on_card), onCard) { onCard = it; settings.visualizerOnCard = it } }
         item { SwitchRow(stringResource(R.string.visualizer_peaks), peaks) { peaks = it; settings.visualizerPeaks = it } }
         item {
             Choice(stringResource(R.string.visualizer_fall_title), listOf(
