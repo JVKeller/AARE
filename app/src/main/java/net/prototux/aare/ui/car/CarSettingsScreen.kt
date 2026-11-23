@@ -1,5 +1,10 @@
 package net.prototux.aare.ui.car
 
+import androidx.compose.material3.Icon
+import androidx.compose.material.icons.rounded.ExpandMore
+import androidx.compose.material.icons.rounded.ExpandLess
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.Icons
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -26,16 +31,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import net.prototux.aare.R
 import net.prototux.aare.Settings
-import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Remove
 import androidx.activity.compose.BackHandler
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
-import androidx.compose.material3.Icon
 import net.prototux.aare.media.CircleButton
 import net.prototux.aare.media.NowPlayingVisuals
 import net.prototux.aare.media.Pill
@@ -56,7 +61,10 @@ internal fun CarSettingsScreen(settings: Settings, modifier: Modifier) {
     var aloud by remember { mutableStateOf(settings.readMessagesAloud) }
     var audio by remember { mutableStateOf(settings.carAudio) }
     var darkBar by remember { mutableStateOf(settings.darkBar) }
+    var railWidgets by remember { mutableStateOf(RailWidget.parse(settings.railWidgets)) }
     var cards by remember { mutableStateOf(DashCard.parse(settings.dashboardCards)) }
+    var mapBig by remember { mutableStateOf(settings.dashboardMapBig) }
+    var agendaCount by remember { mutableStateOf(settings.calendarAgendaCount) }
     var passenger by remember { mutableStateOf(settings.ignoreDriving) }
     var visuals by remember { mutableStateOf(false) }
     if (visuals) {
@@ -77,7 +85,7 @@ internal fun CarSettingsScreen(settings: Settings, modifier: Modifier) {
             }
         }
         item {
-            Choice(stringResource(R.string.setup_choice_bar), listOf(Settings.RAIL_AUTO to stringResource(R.string.setup_choice_bar_auto), Settings.RAIL_LEFT to stringResource(R.string.setup_choice_left), Settings.RAIL_RIGHT to stringResource(R.string.setup_choice_right), Settings.RAIL_BOTTOM to stringResource(R.string.setup_choice_bottom)), rail) {
+            CarSelect(stringResource(R.string.setup_choice_bar), listOf(Settings.RAIL_AUTO to stringResource(R.string.setup_choice_bar_auto), Settings.RAIL_LEFT to stringResource(R.string.setup_choice_left), Settings.RAIL_RIGHT to stringResource(R.string.setup_choice_right), Settings.RAIL_BOTTOM to stringResource(R.string.setup_choice_bottom)), rail) {
                 rail = it; settings.railPosition = it
             }
         }
@@ -85,13 +93,23 @@ internal fun CarSettingsScreen(settings: Settings, modifier: Modifier) {
             StyleChoices(
                 themeId, layoutId, accent,
                 choice = { title, options, selected, onSelect -> Choice(title, options, selected, onSelect) },
+                select = { title, options, selected, onSelect -> CarSelect(title, options, selected, ::styleSwatch, onSelect) },
                 onChange = { t, l -> themeId = t; layoutId = l; settings.carThemeId = t; settings.carLayoutId = l },
                 onAccent = { accent = it; settings.carAccent = it },
             )
         }
         item { SwitchRow(stringResource(R.string.setup_switch_dark_bar), darkBar) { darkBar = it; settings.darkBar = it } }
         item {
+            RailWidgetsEditor(railWidgets, LocalCarDimens.current.touchTarget) { railWidgets = it; settings.railWidgets = it.map(RailWidget::id) }
+        }
+        item {
             DashboardCardsEditor(cards, LocalCarDimens.current.touchTarget) { cards = it; settings.dashboardCards = it.map(DashCard::id) }
+        }
+        item { SwitchRow(stringResource(R.string.dash_map_big_title), mapBig) { mapBig = it; settings.dashboardMapBig = it } }
+        item {
+            Choice(stringResource(R.string.setup_choice_agenda_count), (1..5).map { it.toString() to it.toString() }, agendaCount.toString()) {
+                agendaCount = it.toInt(); settings.calendarAgendaCount = it.toInt()
+            }
         }
         item { SwitchRow(stringResource(R.string.setup_switch_passenger), passenger) { passenger = it; settings.ignoreDriving = it } }
         item { SwitchRow(stringResource(R.string.setup_switch_message_notifications), banners) { banners = it; settings.messageBanners = it } }
@@ -184,7 +202,7 @@ private fun StepRow(title: String, value: String, lessLabel: String, moreLabel: 
 /** A row that opens a page of more settings. */
 @Composable
 private fun EntryRow(title: String, subtitle: String, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().heightIn(min = LocalCarDimens.current.touchTarget).carFocusHighlight(RoundedCornerShape(16.dp)).clickable(onClick = onClick),
+    Row(Modifier.fillMaxWidth().heightIn(min = LocalCarDimens.current.touchTarget).carClickable(RoundedCornerShape(16.dp), onClick = onClick),
         verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text(title, style = MaterialTheme.typography.titleMedium)
@@ -205,11 +223,44 @@ private fun Choice(title: String, options: List<Pair<String, String>>, selected:
     }
 }
 
+/**
+ * A long list of choices as one row with the current value; tapping it (or the knob's press) unfolds
+ * every option below, one full-size row each, and picking one folds it again. The car screen's
+ * stand-in for a drop-down: a pop-up menu is awkward with the knob, and a row of pills can't show
+ * eleven labels at arm's length.
+ */
+@Composable
+private fun CarSelect(title: String, options: List<Pair<String, String>>, selected: String, swatch: (String) -> List<Color> = { emptyList() }, onSelect: (String) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    val rowHeight = LocalCarDimens.current.touchTarget
+    Column {
+        Row(Modifier.fillMaxWidth().heightIn(min = rowHeight).carClickable(MaterialTheme.shapes.medium) { open = !open },
+            verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.titleMedium)
+                Text(options.firstOrNull { it.first == selected }?.second.orEmpty(), style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.primary)
+            }
+            Icon(if (open) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore, null)
+        }
+        if (open) options.forEach { (value, label) ->
+            Row(Modifier.fillMaxWidth().heightIn(min = rowHeight).carClickable(MaterialTheme.shapes.medium) { onSelect(value); open = false }
+                .padding(start = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                swatch(value).takeIf { it.isNotEmpty() }?.let { Swatch(it, 32.dp); Spacer(Modifier.width(16.dp)) }
+                Text(label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                if (value == selected) Icon(Icons.Rounded.Check, null, tint = MaterialTheme.colorScheme.primary)
+            }
+        }
+    }
+}
+
 @Composable
 private fun SwitchRow(title: String, checked: Boolean, onChange: (Boolean) -> Unit) {
-    Row(Modifier.fillMaxWidth().heightIn(min = LocalCarDimens.current.touchTarget).carFocusHighlight(RoundedCornerShape(16.dp)).clickable { onChange(!checked) },
+    Row(Modifier.fillMaxWidth().heightIn(min = LocalCarDimens.current.touchTarget).carClickable(RoundedCornerShape(16.dp)) { onChange(!checked) },
         verticalAlignment = Alignment.CenterVertically) {
         Text(title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+        // Material Switch, not yet carClickable: the row above already gives this whole row the
+        // knob focus and highlight, see the allowlist in CarScreenReachabilityCheckTest.
         Switch(checked = checked, onCheckedChange = onChange)
     }
 }

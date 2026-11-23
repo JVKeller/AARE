@@ -9,7 +9,7 @@ import net.prototux.aare.aap.pcm.PcmFormat
  * The car's media sound, as it is sent, for the now-playing visualizer.
  *
  * The media [CarAudioOut] says what it streams ([open]/[close]); a visual that wants the sound
- * calls [listen], which makes a [PcmRing] the capture thread then copies every chunk the car got
+ * calls [listen], which makes a [TapRing] the capture thread then copies every chunk the car got
  * into. With nobody listening, the capture thread pays one null check per chunk.
  */
 object PcmTap {
@@ -19,7 +19,7 @@ object PcmTap {
     private var owner: Any? = null
 
     /** Read by the capture thread for every chunk: null unless someone listens. */
-    @Volatile var ring: PcmRing? = null
+    @Volatile var ring: TapRing? = null
         private set
     private var listeners = 0
 
@@ -28,7 +28,7 @@ object PcmTap {
         owner = who
         _format.value = format
         val r = ring
-        if (listeners > 0 && (r == null || r.sampleRate != format.rate || r.channels != format.channels)) ring = PcmRing(format.rate, format.channels)
+        if (listeners > 0 && (r == null || r.sampleRate != format.rate || r.channels != format.channels)) ring = TapRing(format.rate, format.channels)
         else r?.clear()
     }
 
@@ -48,7 +48,7 @@ object PcmTap {
         listeners++
         val f = _format.value ?: return
         val r = ring
-        if (r == null || r.sampleRate != f.rate || r.channels != f.channels) ring = PcmRing(f.rate, f.channels)
+        if (r == null || r.sampleRate != f.rate || r.channels != f.channels) ring = TapRing(f.rate, f.channels)
     }
 
     @Synchronized fun release() {

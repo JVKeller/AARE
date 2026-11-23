@@ -8,7 +8,7 @@ package net.prototux.aare.audio
  */
 enum class Mix { MONO, LEFT, RIGHT }
 
-class PcmRing(
+class TapRing(
     val sampleRate: Int,
     val channels: Int,
     capacityMs: Int = 2000,

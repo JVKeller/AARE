@@ -8,7 +8,7 @@ import org.junit.Test
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
-class PcmRingTest {
+class TapRingTest {
 
     private fun packStereo(frames: Int, leftFn: (Int) -> Short, rightFn: (Int) -> Short): ByteArray {
         val buf = ByteArray(frames * 4)
@@ -37,7 +37,7 @@ class PcmRingTest {
 
     @Test fun leftOnlyAndRightOnlyChannelIsolation() {
         val rate = 1000
-        val ring = PcmRing(sampleRate = rate, channels = 2, capacityMs = 2000)
+        val ring = TapRing(sampleRate = rate, channels = 2, capacityMs = 2000)
         // Left-only: left = 16384 (+0.5), right = 0
         val leftOnly = packStereo(100, { 16384 }, { 0 })
         ring.write(leftOnly, 0, leftOnly.size, nowMs = 1000L)
@@ -73,7 +73,7 @@ class PcmRingTest {
 
     @Test fun fullScaleStereoMonoMixPeaksAtOneNotTwo() {
         val rate = 1000
-        val ring = PcmRing(sampleRate = rate, channels = 2, capacityMs = 2000)
+        val ring = TapRing(sampleRate = rate, channels = 2, capacityMs = 2000)
         val fullNeg = packStereo(64, { Short.MIN_VALUE }, { Short.MIN_VALUE })
         ring.write(fullNeg, 0, fullNeg.size, nowMs = 1000L)
 
@@ -94,7 +94,7 @@ class PcmRingTest {
 
     @Test fun delayReturnsWindowEndingDelayMsBeforePlayhead() {
         val rate = 1000 // 1 frame per ms
-        val ring = PcmRing(sampleRate = rate, channels = 1, capacityMs = 2000, targetLeadMs = 0)
+        val ring = TapRing(sampleRate = rate, channels = 1, capacityMs = 2000, targetLeadMs = 0)
         // Write 500 frames in real time (10 chunks of 50 ms) with sample value = frame index
         for (c in 0 until 10) {
             val base = c * 50
@@ -112,7 +112,7 @@ class PcmRingTest {
 
     @Test fun burstWrittenAtOnceAdvancesPlayheadSmoothlyOverTime() {
         val rate = 1000 // 1 frame per ms
-        val ring = PcmRing(sampleRate = rate, channels = 1, capacityMs = 2000)
+        val ring = TapRing(sampleRate = rate, channels = 1, capacityMs = 2000)
         // Write 200 ms (4 chunks of 50 frames) all at the exact same nowMs = 5000L
         for (c in 0 until 4) {
             val base = c * 50
@@ -145,8 +145,8 @@ class PcmRingTest {
     @Test fun wrapAroundMatchesContiguousRead() {
         val rate = 1000
         // Ring holds 500 frames (500 ms); contiguous ring holds 2000 frames (2000 ms)
-        val smallRing = PcmRing(sampleRate = rate, channels = 2, capacityMs = 500)
-        val bigRing = PcmRing(sampleRate = rate, channels = 2, capacityMs = 2000)
+        val smallRing = TapRing(sampleRate = rate, channels = 2, capacityMs = 500)
+        val bigRing = TapRing(sampleRate = rate, channels = 2, capacityMs = 2000)
 
         // Write 750 frames in 3 chunks of 250 frames so smallRing wraps past 500
         for (c in 0 until 3) {
@@ -169,7 +169,7 @@ class PcmRingTest {
 
     @Test fun tooOldOrNothingWrittenReturnsFalseAndLeavesDstAlone() {
         val rate = 1000
-        val ring = PcmRing(sampleRate = rate, channels = 1, capacityMs = 500, targetLeadMs = 0)
+        val ring = TapRing(sampleRate = rate, channels = 1, capacityMs = 500, targetLeadMs = 0)
         val sentinel = FloatArray(100) { 42f }
 
         // Nothing written yet
@@ -199,7 +199,7 @@ class PcmRingTest {
 
     @Test fun oneChannelSourceAllThreeMixesReturnChannel() {
         val rate = 1000
-        val ring = PcmRing(sampleRate = rate, channels = 1, capacityMs = 1000)
+        val ring = TapRing(sampleRate = rate, channels = 1, capacityMs = 1000)
         val chunk = packMono(80) { i -> ((i - 40) * 500).toShort() }
         ring.write(chunk, 0, chunk.size, nowMs = 1000L)
 
@@ -219,7 +219,7 @@ class PcmRingTest {
 
     @Test fun burstyWritesGiveMonotonicEvenlyAdvancingReadWindow() {
         val rate = 1000 // 1 frame per ms
-        val ring = PcmRing(sampleRate = rate, channels = 1, capacityMs = 2000) // default 150 ms target lead
+        val ring = TapRing(sampleRate = rate, channels = 1, capacityMs = 2000) // default 150 ms target lead
         var writtenFrames = 0
 
         fun writeChunk(frames: Int, nowMs: Long) {
@@ -265,7 +265,7 @@ class PcmRingTest {
 
     @Test fun leadConvergesToTargetLeadMs() {
         val rate = 1000
-        val ring = PcmRing(sampleRate = rate, channels = 1, capacityMs = 2000, targetLeadMs = 150)
+        val ring = TapRing(sampleRate = rate, channels = 1, capacityMs = 2000, targetLeadMs = 150)
         var writtenFrames = 0
 
         // Start with zero lead: write 40-frame chunks every 40 ms for 6 seconds (150 chunks)
