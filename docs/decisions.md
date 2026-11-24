@@ -663,6 +663,11 @@ Exports and imports go through an allow-list (`SettingsBackup.ALLOWED`): each se
 between phones, with the `SharedPreferences` type Settings.kt reads it with. A setting added later
 stays out until someone adds it there on purpose.
 
+Every key Settings.kt uses has to be in one of three lists: `ALLOWED`, `BLOCKED`, or
+`NOT_BACKED_UP` (this phone's or car's own state, bookkeeping, and anything personal or secret). A
+test scans Settings.kt and fails on a key in none of them. Without it, a new setting is silently
+left out of backups, and nobody notices until a phone is replaced.
+
 - An import file is not trusted. An entry with an unknown key, a blocked key or another type than
   the allow-list's is skipped (and counted in the "imported" message), never written: an Int where
   Settings calls `getBoolean` would throw `ClassCastException` on every launch, a crash loop the
@@ -670,7 +675,8 @@ stays out until someone adds it there on purpose.
 - `SettingsBackup.BLOCKED` is never exported or imported, though these are ordinary settings: the
   head unit server and its LAN, LAN-once, localhost and mirror options (network or other-app
   exposure), passenger mode (lifts the driving restrictions), root audio, standalone phone apps
-  (root/Shizuku, behind a warning) and certificate auto-update (a third-party download). Each must
+  (root/Shizuku, behind a warning) and their driving rules, the other root or Shizuku options, the
+  assistant's links and certificate auto-update (a third-party download). Each must
   be switched on by hand on the phone itself. A test checks the two lists never overlap.
 - A file carrying a blocked key (hand-edited, or from a version that exported one) leaves it
   unchanged on import, in particular `hu_server_localhost`, `standalone_apps` and
