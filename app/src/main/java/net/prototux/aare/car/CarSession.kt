@@ -509,8 +509,8 @@ class CarSession(
                     val resume = resumesAfterCarPause(notification.unsolicited, pausedForGuidance)
                     pausedByCar = false
                     pausedForGuidance = false
-                    // Still voice typing on the phone: the mic closing resumes instead.
-                    if (resume && phoneMicOpen) pausedByMic = true
+                    // Still voice typing on the phone, or just stopped: the mic closing resumes instead.
+                    if (resume && (phoneMicOpen || pausedByMic)) pausedByMic = true
                     else if (resume && media.playback.value?.playing != true) media.playPause()
                 }
             }
@@ -539,6 +539,7 @@ class CarSession(
             val open = !carMicOpen && configs.any { !it.isClientSilenced && it.clientAudioSource in SPEECH_SOURCES }
             if (open == phoneMicOpen) return
             phoneMicOpen = open
+            main.removeCallbacks(micResume)
             if (open) {
                 if (media.playback.value?.playing == true) {
                     pausedByMic = true
@@ -546,13 +547,20 @@ class CarSession(
                     media.pause()
                 }
             } else if (pausedByMic) {
-                pausedByMic = false
-                // Paused by the car as well: its gain resumes.
-                if (!pausedByCar && media.playback.value?.playing != true) {
-                    DiagLog.add("car audio: the phone's mic closed, playing again")
-                    media.playPause()
-                }
+                // Some apps (Claude's voice input) close the mic and open it again a few seconds
+                // later: playing at once brings the music back ducked, only to cut it again.
+                DiagLog.add("car audio: the phone's mic closed, playing again in ${MIC_RESUME_DELAY_MS / 1000} s")
+                main.postDelayed(micResume, MIC_RESUME_DELAY_MS)
             }
+        }
+    }
+    private val micResume = Runnable {
+        if (closed || phoneMicOpen || !pausedByMic) return@Runnable
+        pausedByMic = false
+        // Paused by the car as well: its gain resumes.
+        if (!pausedByCar && media.playback.value?.playing != true) {
+            DiagLog.add("car audio: the phone's mic stayed closed, playing again")
+            media.playPause()
         }
     }
     /** [pausedByCar] by the car keeping only navigation voice (main thread). */
@@ -1630,6 +1638,8 @@ class CarSession(
     companion object {
         private const val TAG = "AareSession"
         private const val VIDEO_FOCUS_RETRY_MS = 3_000L
+        /** Wait after the phone's mic closes before playing again: Claude reopens it within ~4 s. */
+        private const val MIC_RESUME_DELAY_MS = 5_000L
         /** The keys that start, stop or skip media, which [onKey] ignores until there is a car screen. */
         private val MEDIA_KEYS = setOf(
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_HEADSETHOOK, KeyEvent.KEYCODE_MEDIA_PLAY,
