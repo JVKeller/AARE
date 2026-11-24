@@ -577,7 +577,7 @@ private fun ShizukuGrantResult(items: List<ShizukuSetupClient.Item>, onDismiss: 
 }
 
 @Composable
-private fun Check(title: String, subtitle: String, done: Boolean, onClick: () -> Unit) {
+private fun Check(title: String, subtitle: String, done: Boolean, onInfo: (() -> Unit)? = null, onClick: () -> Unit) {
     Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).clickable(enabled = !done, onClick = onClick).padding(vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically) {
         Icon(if (done) Icons.Rounded.CheckCircle else Icons.Rounded.RadioButtonUnchecked, null,
@@ -587,8 +587,22 @@ private fun Check(title: String, subtitle: String, done: Boolean, onClick: () ->
             Text(title, style = MaterialTheme.typography.bodyLarge)
             Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+        if (onInfo != null) IconButton(onClick = onInfo) {
+            Icon(Icons.Rounded.Info, stringResource(R.string.common_details), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         if (!done) Text(stringResource(R.string.setup_action_set_up), color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge)
     }
+}
+
+/** What screen-capture audio covers and what it doesn't, opened from the info button on its row. */
+@Composable
+private fun PlaybackCaptureDetails(onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.audio_playback_details_title)) },
+        text = { Text(stringResource(R.string.audio_playback_details), style = MaterialTheme.typography.bodyMedium) },
+        confirmButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_ok)) } },
+    )
 }
 
 /**
@@ -1206,15 +1220,20 @@ private fun AudioSettings(settings: Settings, state: ProjectionService.State, re
                     }
                 }
             }
+            var captureDetails by remember { mutableStateOf(false) }
+            if (captureDetails) PlaybackCaptureDetails { captureDetails = false }
             Check(stringResource(CaptureMethod.PLAYBACK_CAPTURE.title),
                 if (state.audioCapture) stringResource(R.string.audio_playback_ready)
                 else stringResource(R.string.audio_playback_not_ready),
-                state.audioCapture) {
+                state.audioCapture, onInfo = { captureDetails = true }) {
                 val mpm = ctx.getSystemService(MediaProjectionManager::class.java)
                 // Audio capture takes whatever app is shared: the shared app only picks the video,
                 // which car audio doesn't use. "A single app" avoids Android's screen-share
                 // protections, which mute notifications while the entire screen is shared; the
                 // phone screen needs the entire screen.
+                // Android's own app list doesn't say any app will do: tell them over it.
+                if (Build.VERSION.SDK_INT >= 34 && keepNotifications)
+                    android.widget.Toast.makeText(ctx, R.string.audio_capture_pick_any_app, android.widget.Toast.LENGTH_LONG).show()
                 consent.launch(when {
                     Build.VERSION.SDK_INT < 34 -> mpm.createScreenCaptureIntent()
                     keepNotifications -> mpm.createScreenCaptureIntent(MediaProjectionConfig.createConfigForUserChoice())

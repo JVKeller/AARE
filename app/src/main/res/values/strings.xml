@@ -23,6 +23,7 @@
     <string name="common_unsupported_screen">This screen isn\'t supported yet</string>
     <string name="common_loading">Loading</string>
     <string name="common_ok">OK</string>
+    <string name="common_details">Details</string>
     <string name="common_try_again">Try again</string>
     <string name="common_something_went_wrong">Something went wrong</string>
 
@@ -474,12 +475,15 @@
     <string name="audio_shizuku_install_hint">No root needed. Install Shizuku, start it (wireless debugging, once per reboot), then come back here.</string>
     <string name="audio_root_ready">Ready, through root. Everything the phone plays goes to the car, navigation voice included; the phone stays quiet.</string>
     <string name="audio_shizuku_or_root_hint">On a rooted phone (KernelSU, Magisk, APatch…), tap to allow root. Otherwise install Shizuku and start it (wireless debugging, once per reboot).</string>
-    <string name="audio_playback_ready">Ready. Media only: no navigation voice, some apps opt out, and the phone keeps playing too.</string>
-    <string name="audio_playback_not_ready">Works everywhere, with limits: media only, no navigation voice. Android calls this screen sharing, but AARE only takes the sound.</string>
+    <string name="audio_playback_ready">Ready. Music and other media; navigation voice goes through Navigation voice below. Some apps opt out, and the phone keeps playing too.</string>
+    <string name="audio_playback_not_ready">Works everywhere, with limits: music and other media, with navigation voice through Navigation voice below. Android calls this screen sharing, but AARE only takes the sound.</string>
+    <string name="audio_playback_details_title">Screen-capture audio</string>
+    <string name="audio_playback_details">Android lets AARE copy what the phone\'s media apps play and send it to the car. No root or Shizuku needed.\n\n• Navigation voice: apps that speak with the phone\'s voice engine (CoMaps, Organic Maps, OsmAnd…) reach the car through Navigation voice below, on the car\'s navigation channel, which lowers the music around them. Turn it on there and choose AARE as the phone\'s voice engine. Apps that play their own recorded voice aren\'t covered.\n\n• Some apps don\'t allow their sound to be copied, and stay on the phone.\n\n• The copy doesn\'t stop the phone playing: Silence the phone turns its media volume down while the car plays.\n\n• Android calls this screen sharing. AARE only takes the sound. With Keep notifications on, choose \"A single app\" and any app, so notifications aren\'t muted.</string>
     <string name="audio_toggle_mute_phone_title">Silence the phone while the car plays</string>
     <string name="audio_toggle_mute_phone_subtitle">Screen capture copies the sound, so the phone would keep playing too: its media volume goes to 0 while connected and comes back after</string>
     <string name="audio_toggle_keep_notifications_title">Keep notifications while capturing audio</string>
     <string name="audio_toggle_keep_notifications_on">When Android asks, choose \"A single app\" and pick any app: the sound is the same, and notifications stay on. Choose \"Entire screen\" only for the phone screen in the car.</string>
+    <string name="audio_capture_pick_any_app">Choose \"A single app\", then any app at all: AARE only takes the sound, so it doesn\'t matter which.</string>
     <string name="audio_toggle_keep_notifications_off">Asks for the entire screen, which the phone screen in the car needs. Android mutes notifications for as long as the screen is shared.</string>
     <string name="audio_keep_notifications_next_time">Applies the next time you give screen capture: tap Screen capture above to give it again.</string>
     <string name="tts_engine_label">AARE car voice</string>
